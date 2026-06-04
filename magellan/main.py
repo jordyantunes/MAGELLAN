@@ -3,6 +3,7 @@
 '''
 
 import hydra
+import mlflow
 import numpy as np
 import os
 import pickle
@@ -144,6 +145,28 @@ def main(config_args):
     random.seed(seed)
     set_seed(seed)
     
+    is_rl_process = int(os.environ.get("RANK", "0")) == 0
+
+    if is_rl_process:
+        mlflow.set_experiment(config_args.rl_script_args.goal_sampler)
+        mlflow.start_run(run_name=f"seed{seed}")
+    if is_rl_process:
+        mlflow.log_params({
+            "seed": seed,
+            "goal_sampler": config_args.rl_script_args.goal_sampler,
+            "model_path": config_args.lamorel_args.llm_args.model_path,
+            "lora_r": config_args.rl_script_args.lora_r,
+            "lora_alpha": config_args.rl_script_args.lora_alpha,
+            "lr": config_args.rl_script_args.lr,
+            "gamma": config_args.rl_script_args.gamma,
+            "minibatch_size": config_args.rl_script_args.minibatch_size,
+            "gradient_batch_size": config_args.rl_script_args.gradient_batch_size,
+            "buffer_size": config_args.rl_script_args.buffer_size,
+            "number_envs": config_args.rl_script_args.number_envs,
+            "num_episodes": config_args.rl_script_args.num_episodes,
+            "goals_distribution": str(config_args.rl_script_args.goals_distribution),
+        })
+
     loading_path = config_args.rl_script_args.loading_path
     if loading_path is not None and loading_path.split("/")[-1].startswith("seed"):
         subdirs = [int(folder) for folder in os.listdir(loading_path) if os.path.isdir(os.path.join(loading_path, folder)) and folder.isdigit()]
@@ -289,8 +312,12 @@ def main(config_args):
                     eval_result.update(test_lp(eval_goals, goal_sampler, config_args))
             nb_test += 1
             test_results.append((ep, result))
+            if is_rl_process:
+                mlflow.log_metrics({f"test/{k}": v for k, v in result.items()}, step=ep)
             if not config_args.rl_script_args.adaptation_test:
                 eval_results.append((ep, eval_result))
+                if is_rl_process:
+                    mlflow.log_metrics({f"eval/{k}": v for k, v in eval_result.items()}, step=ep)
             
                     
         # Collect trajectories
@@ -341,11 +368,24 @@ def main(config_args):
                                             func='sac_update'
                                             )
                 
-                history['policy_loss'].append(np.mean([_r['policy_loss'] for _r in policy_update_results]))
-                history['value_loss'].append(np.mean([_r['value_loss'] for _r in policy_update_results]))
-                history['alpha_loss'].append(np.mean([_r['alpha_loss'] for _r in policy_update_results]))
-                history['entropy'].append(np.mean([_r['entropy'] for _r in policy_update_results]))
-                history['alpha'].append(policy_update_results[0]['alpha'])
+                _policy_loss = np.mean([_r['policy_loss'] for _r in policy_update_results])
+                _value_loss = np.mean([_r['value_loss'] for _r in policy_update_results])
+                _alpha_loss = np.mean([_r['alpha_loss'] for _r in policy_update_results])
+                _entropy = np.mean([_r['entropy'] for _r in policy_update_results])
+                _alpha = policy_update_results[0]['alpha']
+                history['policy_loss'].append(_policy_loss)
+                history['value_loss'].append(_value_loss)
+                history['alpha_loss'].append(_alpha_loss)
+                history['entropy'].append(_entropy)
+                history['alpha'].append(_alpha)
+                if is_rl_process:
+                    mlflow.log_metrics({
+                        "train/policy_loss": _policy_loss,
+                        "train/value_loss": _value_loss,
+                        "train/alpha_loss": _alpha_loss,
+                        "train/entropy": _entropy,
+                        "train/alpha": _alpha,
+                    }, step=ep)
                                                 
                 if use_magellan and len(goal_buffer) > 0:
                     # Update the SR estimator
@@ -403,6 +443,8 @@ def main(config_args):
             history = reset_history()
     
     print("Training done.")
+    if is_rl_process:
+        mlflow.end_run()
     agent.close()
                 
 if __name__ == "__main__":
