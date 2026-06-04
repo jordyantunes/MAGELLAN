@@ -1,0 +1,33 @@
+services:
+  magellan:
+    build:
+      context: .
+      secrets:
+        - ssh_key
+    image: magellan:latest
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - MLFLOW_TRACKING_URI=sqlite:////app/outputs/mlflow.db
+      # Set your HuggingFace token if using gated models
+      # - HF_TOKEN=...
+    volumes:
+      # Persist training outputs
+      - ./outputs:/app/outputs
+      # Cache model weights across runs (avoids re-downloading)
+      - hf_cache:/app/.cache/huggingface
+    # Override for MAGELLAN sampler:
+    # command: ["python", "-m", "lamorel_launcher.launch",
+    #   "--config-path", "/app/configs/little_zoo/",
+    #   "--config-name", "local_gpu_config_magellan",
+    #   "rl_script_args.path=/app/magellan/main.py",
+    #   "rl_script_args.output_dir=/app/outputs/magellan",
+    #   "rl_script_args.seed=0"]
+
+volumes:
+  hf_cache:
+
+secrets:
+  ssh_key:
+    file: ~/.ssh/id_ed25519
