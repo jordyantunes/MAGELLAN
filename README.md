@@ -12,12 +12,17 @@
 
 ## 🛠 Installation
 
-To set up MAGELLAN, you need to install the following dependencies:
+Dependencies are managed with [uv](https://docs.astral.sh/uv/). MAGELLAN uses private forks of [Lamorel](https://github.com/jordyantunes/lamorel) and [LittleZoo](https://github.com/jordyantunes/littlezoo) — the lamorel fork includes a fix for a bitsandbytes/accelerate incompatibility (see [COMPATIBILITY.md](COMPATIBILITY.md)).
 
-- **[Lamorel](https://github.com/flowersteam/lamorel)**
-- **[LittleZoo](https://github.com/flowersteam/littlezoo)**
+Since the forks are private, uv needs SSH access to GitHub to fetch them. Make sure your SSH key is registered with GitHub, then:
 
-Follow the installation instructions in the respective repositories.
+```bash
+# Route GitHub HTTPS URLs through SSH (needed for private repos)
+git config --global url."git@github.com:".insteadOf "https://github.com/"
+
+# Install all dependencies (Python 3.12 managed by uv)
+uv sync
+```
 
 ---
 
@@ -52,6 +57,93 @@ To resume training from a checkpoint:
 ```bash
 python -m lamorel_launcher.launch --config-path configs/little_zoo/ --config-name local_gpu_config_magellan rl_script_args.path=magellan/main.py rl_script_args.output_dir=outputs/magellan rl_script_args.seed=0 rl_script_args.loading_path=outputs/magellan/10000
 ```
+
+### 🐳 Docker
+
+#### Build
+
+The forks are private, so the build needs your SSH key to fetch them:
+
+```bash
+docker build --secret id=ssh_key,src=$HOME/.ssh/id_ed25519 -t magellan .
+```
+
+#### Run locally
+
+```bash
+# Random sampler (default)
+docker run --gpus all \
+  -v $(pwd)/outputs:/app/outputs \
+  -v hf_cache:/app/.cache/huggingface \
+  magellan
+
+# MAGELLAN sampler
+docker run --gpus all \
+  -v $(pwd)/outputs:/app/outputs \
+  -v hf_cache:/app/.cache/huggingface \
+  magellan \
+  python -m lamorel_launcher.launch \
+    --config-path /app/configs/little_zoo/ \
+    --config-name local_gpu_config_magellan \
+    rl_script_args.path=/app/magellan/main.py \
+    rl_script_args.output_dir=/app/outputs/magellan \
+    rl_script_args.seed=0
+
+# Resume from checkpoint
+docker run --gpus all \
+  -v $(pwd)/outputs:/app/outputs \
+  -v hf_cache:/app/.cache/huggingface \
+  magellan \
+  python -m lamorel_launcher.launch \
+    --config-path /app/configs/little_zoo/ \
+    --config-name local_gpu_config_magellan \
+    rl_script_args.path=/app/magellan/main.py \
+    rl_script_args.output_dir=/app/outputs/magellan \
+    rl_script_args.seed=0 \
+    rl_script_args.loading_path=/app/outputs/magellan/10000
+```
+
+Or with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+#### Deploy on AWS (EC2 Spot)
+
+EC2 Spot instances give ~70% cost savings. The built-in checkpoint/resume support makes MAGELLAN Spot-safe: if the instance is interrupted, resume from the latest checkpoint.
+
+**Recommended instance types:**
+
+| Instance | GPU | VRAM | Notes |
+|---|---|---|---|
+| `g5.xlarge` | A10G | 24 GB | Best price/performance starting point |
+| `g5.2xlarge` | A10G | 24 GB | More CPU/RAM if the RL process is the bottleneck |
+| `p3.2xlarge` | V100 | 16 GB | Cheaper spot market, good alternative |
+
+**Setup steps:**
+
+```bash
+# 1. Push image to ECR
+aws ecr create-repository --repository-name magellan
+aws ecr get-login-password | docker login --username AWS \
+  --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
+docker tag magellan:latest <account>.dkr.ecr.<region>.amazonaws.com/magellan:latest
+docker push <account>.dkr.ecr.<region>.amazonaws.com/magellan:latest
+
+# 2. On the EC2 instance (after installing NVIDIA Container Toolkit):
+aws ecr get-login-password | docker login --username AWS \
+  --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
+docker pull <account>.dkr.ecr.<region>.amazonaws.com/magellan:latest
+docker run --gpus all \
+  -v /mnt/efs/outputs:/app/outputs \
+  -v /mnt/efs/hf_cache:/app/.cache/huggingface \
+  <account>.dkr.ecr.<region>.amazonaws.com/magellan:latest
+```
+
+Mount an EFS volume at `/mnt/efs` so outputs and model weights persist across Spot interruptions and instance restarts.
+
+---
 
 ### 🖥️ HPC Cluster Usage
 
