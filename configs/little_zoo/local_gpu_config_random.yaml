@@ -3,20 +3,21 @@ lamorel_args:
   allow_subgraph_use_whith_gradient: true
   distributed_setup_args:
     n_rl_processes: 1
-    n_llm_processes: 2
+    n_llm_processes: 1
   accelerate_args:
     config_file: ./default_config.yaml
     machine_rank: 0
     main_process_ip: 127.0.0.1
     num_machines: 1
-    main_process_port: ???
+    main_process_port: 9876
   llm_args:
+    seed:
     model_type: seq2seq
-    model_path: /LLMs/flan-t5-base
+    model_path: google/flan-t5-base
     pretrained: true
-    minibatch_size: 4096
+    minibatch_size: 256
     pre_encode_inputs: true
-    load_in_4bit: true
+    load_in_4bit: false
     parallelism:
       use_gpu: true
       model_parallelism_size: 1
@@ -28,7 +29,7 @@ rl_script_args:
   seed: ???
   
   # llm
-  gradient_batch_size: 128
+  gradient_batch_size: 96
   gradient_minibatch_size:
   
   # LoRA

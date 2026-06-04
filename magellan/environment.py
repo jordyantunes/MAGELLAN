@@ -30,49 +30,58 @@ class VectorizedEnv():
     
 
 def generate_goals(env, seed, distribution, filter_test):
-    
-    # Filter goals randomly to match the distribution
-    def sample_goals(goal_list, num_samples):
-        if len(goal_list) <= num_samples:
-            return goal_list
-        return list(np.random.choice(goal_list, num_samples, replace=False))
-    
-    np.random.seed(seed)
-    
+
+    rng = np.random.default_rng(seed)
+
     furnitures = env.env_params['categories']['furniture'][:6]
     plants = env.env_params['categories']['plant'][:6]
     herbivores = env.env_params['categories']['herbivore'][:6]
     carnivores = env.env_params['categories']['carnivore'][:6]
     supplies = env.env_params['categories']['supply']
-    
+
     furnitures_test = env.env_params['categories']['furniture'][6:]
     plants_test = env.env_params['categories']['plant'][6:]
     herbivores_test = env.env_params['categories']['herbivore'][6:]
     carnivores_test = env.env_params['categories']['carnivore'][6:]
-    
+
     objects = furnitures + plants + herbivores + carnivores + supplies
     objects_test = furnitures_test + plants_test + herbivores_test + carnivores_test
-    
-    all_goals = OrderedDict()
-    goals = OrderedDict()
+
+    plants_set = set(plants)
+    herbivores_set = set(herbivores)
+    carnivores_set = set(carnivores)
+    furnitures_set = set(furnitures)
+    supplies_set = set(supplies)
+    plants_test_set = set(plants_test)
+    herbivores_test_set = set(herbivores_test)
+    carnivores_test_set = set(carnivores_test)
+    furnitures_test_set = set(furnitures_test)
 
     def get_name(obj):
-        if obj in plants + plants_test:
+        if obj in plants_set | plants_test_set:
             return obj + ' seed'
-        elif obj in herbivores + carnivores + herbivores_test + carnivores_test:
+        elif obj in herbivores_set | carnivores_set | herbivores_test_set | carnivores_test_set:
             return 'baby ' + obj
         else:
             return obj
 
-    impossibles = []
-    grasp = []
-    grow_plants = []
-    grow_herbivores = []
-    grow_carnivores = []
-    
+    def _reservoir_add(reservoir, item, count, k):
+        if count < k:
+            reservoir.append(item)
+        else:
+            j = int(rng.integers(0, count + 1))
+            if j < k:
+                reservoir[j] = item
+
+    goals = OrderedDict()
+    impossibles, grasp, grow_plants, grow_herbivores, grow_carnivores = [], [], [], [], []
+
     if env.train:
-        
-        # Train goals
+
+        caps = distribution  # [n_impossibles, n_grasp, n_grow_plants, n_grow_herbivores, n_grow_carnivores]
+        reservoirs = [[], [], [], [], []]
+        counts = [0, 0, 0, 0, 0]
+
         for e1 in objects:
             e1_name = get_name(e1)
             for e2 in objects:
@@ -81,52 +90,54 @@ def generate_goals(env, seed, distribution, filter_test):
                     e3_name = get_name(e3)
                     for e4 in objects:
                         e4_name = get_name(e4)
+                        seen = {e1, e2, e3, e4}
+                        has_water = 'water' in seen
+                        has_plant = bool(seen & plants_set)
+                        has_herbivore = bool(seen & herbivores_set)
                         for o in objects:
-                            for t in ('Grasp', 'Grow'):
-                                g = f'Goal: {t} {o}\n'
-                                g += f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
-                                g += 'You are standing on: nothing\n'
-                                g += 'Inventory (0/2): empty\n'
-                                g += 'Action: '
-                                
-                                # Impossible goals
-                                if (o not in (e1, e2, e3, e4) or t == 'Grow' and (o in furnitures + supplies or 'water' not in (e1, e2, e3, e4) or o in herbivores + carnivores and e1 not in plants and e2 not in plants and e3 not in plants and e4 not in plants or o in carnivores and e1 not in herbivores and e2 not in herbivores and e3 not in herbivores and e4 not in herbivores)):
-                                    impossibles.append(g)
-                                elif t == 'Grasp':
-                                    grasp.append(g)
-                                elif o in plants:
-                                    grow_plants.append(g)
-                                elif o in herbivores:
-                                    grow_herbivores.append(g)
-                                elif o in carnivores:
-                                    grow_carnivores.append(g)
-                                else:
-                                    raise ValueError(f'Invalid goal: {g}')
-                                
-                                all_goals[g] = (t + ' ' + o, e1, e2, e3, e4)
-        
+                            g = (f'Goal: {{t}} {o}\n'
+                                 f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
+                                 'You are standing on: nothing\n'
+                                 'Inventory (0/2): empty\n'
+                                 'Action: ')
+                            meta = (o, e1, e2, e3, e4)
+                            o_in_scene = o in seen
 
-        # Apply distribution
-        goals = OrderedDict()
-        impossibles = {g: all_goals.pop(g) for g in sample_goals(impossibles, distribution[0])}
-        goals.update(impossibles)
-        grasp = {g: all_goals.pop(g) for g in sample_goals(grasp, distribution[1])}
-        goals.update(grasp)
-        grow_plants = {g: all_goals.pop(g) for g in sample_goals(grow_plants, distribution[2])}
-        goals.update(grow_plants)
-        grow_herbivores = {g: all_goals.pop(g) for g in sample_goals(grow_herbivores, distribution[3])}
-        goals.update(grow_herbivores)
-        grow_carnivores = {g: all_goals.pop(g) for g in sample_goals(grow_carnivores, distribution[4])}
-        goals.update(grow_carnivores)
-        impossibles = list(impossibles.keys())
-        grasp = list(grasp.keys())
-        grow_plants = list(grow_plants.keys())
-        grow_herbivores = list(grow_herbivores.keys())
-        grow_carnivores = list(grow_carnivores.keys())
-                                
+                            for t in ('Grasp', 'Grow'):
+                                goal = g.replace('{t}', t)
+                                full_meta = (t + ' ' + o,) + meta[1:]
+
+                                if (not o_in_scene
+                                        or t == 'Grow' and (
+                                            o in furnitures_set or o in supplies_set
+                                            or not has_water
+                                            or o in herbivores_set | carnivores_set and not has_plant
+                                            or o in carnivores_set and not has_herbivore)):
+                                    cat = 0
+                                elif t == 'Grasp':
+                                    cat = 1
+                                elif o in plants_set:
+                                    cat = 2
+                                elif o in herbivores_set:
+                                    cat = 3
+                                elif o in carnivores_set:
+                                    cat = 4
+                                else:
+                                    raise ValueError(f'Invalid goal: {goal}')
+
+                                _reservoir_add(reservoirs[cat], (goal, full_meta), counts[cat], caps[cat])
+                                counts[cat] += 1
+
+        cat_lists = [impossibles, grasp, grow_plants, grow_herbivores, grow_carnivores]
+        for reservoir, cat_list in zip(reservoirs, cat_lists):
+            for goal, meta in reservoir:
+                goals[goal] = meta
+                cat_list.append(goal)
+
     else:
-        
-        # Test goals
+
+        all_goals = OrderedDict()
+
         for e2 in objects:
             e2_name = get_name(e2)
             for e3 in objects:
@@ -136,52 +147,63 @@ def generate_goals(env, seed, distribution, filter_test):
                     for o in objects_test:
                         e1 = o
                         e1_name = get_name(e1)
+                        seen = {e1, e2, e3, e4}
+                        has_water = 'water' in seen
+                        has_plant = bool(seen & plants_set)
+                        has_herbivore = bool(seen & herbivores_set)
                         for t in ('Grasp', 'Grow'):
-                            g = f'Goal: {t} {o}\n'
-                            g += f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
-                            g += 'You are standing on: nothing\n'
-                            g += 'Inventory (0/2): empty\n'
-                            g += 'Action: '
-                            
-                            # Impossible goals
-                            if o not in (e1, e2, e3, e4) or t == 'Grow' and (o in furnitures_test + supplies or 'water' not in (e1, e2, e3, e4) or o in herbivores_test + carnivores_test and e1 not in plants and e2 not in plants and e3 not in plants and e4 not in plants or o in carnivores_test and e1 not in herbivores and e2 not in herbivores and e3 not in herbivores and e4 not in herbivores):
+                            g = (f'Goal: {t} {o}\n'
+                                 f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
+                                 'You are standing on: nothing\n'
+                                 'Inventory (0/2): empty\n'
+                                 'Action: ')
+
+                            if (o not in seen
+                                    or t == 'Grow' and (
+                                        o in furnitures_test_set or o in supplies_set
+                                        or not has_water
+                                        or o in herbivores_test_set | carnivores_test_set and not has_plant
+                                        or o in carnivores_test_set and not has_herbivore)):
                                 impossibles.append(g)
                             elif t == 'Grasp':
                                 grasp.append(g)
-                            elif o in plants_test:
+                            elif o in plants_test_set:
                                 grow_plants.append(g)
-                            elif o in herbivores_test:
+                            elif o in herbivores_test_set:
                                 grow_herbivores.append(g)
-                            elif o in carnivores_test:
+                            elif o in carnivores_test_set:
                                 grow_carnivores.append(g)
                             else:
                                 raise ValueError('Invalid object')
-                            
+
                             all_goals[g] = (t + ' ' + o, e1, e2, e3, e4)
-            
+
         if filter_test:
-            # Apply distribution
-            goals = OrderedDict()
-            impossibles = {g: all_goals.pop(g) for g in sample_goals(impossibles, distribution[0])}
-            goals.update(impossibles)
-            grasp = {g: all_goals.pop(g) for g in sample_goals(grasp, distribution[1])}
-            goals.update(grasp)
-            grow_plants = {g: all_goals.pop(g) for g in sample_goals(grow_plants, distribution[2])}
-            goals.update(grow_plants)
-            grow_herbivores = {g: all_goals.pop(g) for g in sample_goals(grow_herbivores, distribution[3])}
-            goals.update(grow_herbivores)
-            grow_carnivores = {g: all_goals.pop(g) for g in sample_goals(grow_carnivores, distribution[4])}
-            goals.update(grow_carnivores)
-            impossibles = list(impossibles.keys())
-            grasp = list(grasp.keys())
-            grow_plants = list(grow_plants.keys())
-            grow_herbivores = list(grow_herbivores.keys())
-            grow_carnivores = list(grow_carnivores.keys())
+            def _sample(lst, k):
+                if len(lst) <= k:
+                    return lst
+                idx = rng.choice(len(lst), k, replace=False)
+                return [lst[i] for i in idx]
+
+            for lst in [
+                _sample(impossibles, distribution[0]),
+                _sample(grasp, distribution[1]),
+                _sample(grow_plants, distribution[2]),
+                _sample(grow_herbivores, distribution[3]),
+                _sample(grow_carnivores, distribution[4]),
+            ]:
+                for g in lst:
+                    goals[g] = all_goals[g]
+
+            impossibles = _sample(impossibles, distribution[0])
+            grasp = _sample(grasp, distribution[1])
+            grow_plants = _sample(grow_plants, distribution[2])
+            grow_herbivores = _sample(grow_herbivores, distribution[3])
+            grow_carnivores = _sample(grow_carnivores, distribution[4])
         else:
             goals = all_goals
-        
-                            
-    return {'goals': goals, 'impossibles': impossibles, 'grasp': grasp, 'grow_plants': grow_plants, 
+
+    return {'goals': goals, 'impossibles': impossibles, 'grasp': grasp, 'grow_plants': grow_plants,
             'grow_herbivores': grow_herbivores, 'grow_carnivores': grow_carnivores}
     
     
