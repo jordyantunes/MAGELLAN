@@ -3,11 +3,16 @@
     "LogScoringModuleFn" is the actor and "ValueHeadModuleFn" is the critic.
 '''
 
+# SAC: Take good actions, but keep some randomness
+
 import torch
 from lamorel import BaseModuleFunction
 
 
 # LLM Actor
+# ["score"]
+# computes the log-probability of generating a candidate action given a goal
+# Prompt + Candidate Action => LLM => Token logits for action tokens => Gather logits corresponding to actual action tokens => Sum token log-probabilities => Action score (log-probability) => Softmax over candidate actions => Policy π(a|s) => Sample action
 class LogScoringModuleFn(BaseModuleFunction):
     
     def __init__(self, model_type, pre_encoded_input):
@@ -33,9 +38,14 @@ class LogScoringModuleFn(BaseModuleFunction):
             logits = forward_outputs["logits"][:, :-1, :]  # skip </s> token appended by tokenizer
             output_tokens = minibatch["decoder_input_ids"][:, 1:]  # skip pad token
 
+        # extracts the logit assigned to each token in the candidate action
+        # ex.: ["take", "apple"]
+        # log P("take"|context)
+        # log P("apple"|context,"take")
         tokens_logprobs = \
             torch.gather(logits, 2, output_tokens[:, :, None]).squeeze(-1).to(torch.float32)  # filter with sequence tokens
 
+        # Sum probs for each token of the action
         # Compute mask to assign probability 1 to padding tokens
         mask = torch.ones(tokens_logprobs.shape, dtype=torch.bool, device=self.device)
         for i, _output in enumerate(output_tokens):
@@ -52,6 +62,10 @@ class LogScoringModuleFn(BaseModuleFunction):
 
 
 # Crtic on the last hidden state of the LLM decoder
+# Value = expected future reward
+# Prompt => LLM => Embedding => MLP => Value
+# Propagates the FUTURE reward backwards to earlier states where the reward is unclear (objective not reached yet)
+# Uses the replay buffer, that keeps track of transitions
 class ValueHeadModuleFn(BaseModuleFunction):
     
     def __init__(self, model_type, pre_encoded_input, name):
@@ -110,7 +124,8 @@ class ValueHeadModuleFn(BaseModuleFunction):
         else:
             return lambda n: f'.{self._name}.' in n or '.default.' in n
 
-# SR estimation head for MAGELLAN       
+# SR estimation head for MAGELLAN (according to the prompt embedding) 
+# Prompt => LLM => Embedding => SR head => Success probability logit
 class SRHeadModuleFn(BaseModuleFunction):
     
     def __init__(self, model_type, pre_encoded_input, name, adapters, train_llm):
@@ -134,6 +149,8 @@ class SRHeadModuleFn(BaseModuleFunction):
                 print(self.llm_config.to_dict())
                 raise NotImplementedError("Unknown hidden size key")
         self._llm_hidden_size = self.llm_config.to_dict()[_hidden_size_key]
+
+        # Architecture
         self.value_head_op = torch.nn.Sequential(
             torch.nn.Linear(self._llm_hidden_size, 128),
             torch.nn.Tanh(),

@@ -29,36 +29,64 @@ from utils.tests import test_policy, test_lp
 lamorel_init()
 
 def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_envs, state=None):
+    """
+    Simultaniously across several envs, run an episode:
+    several actions and transition pairs, by sampling goals and selecting possible actions to reach that goal 
+    (score them and select randomly with higher probability the better scores)
+    - Initialize N environments
+    - Repeat:
+        Build prompts
+        Score candidate actions
+        Sample actions
+        Step environments
+        Store transitions
+
+        If episode ends:
+            Log statistics
+            Sample a new goal
+            Reset environment
+    - Return:
+        collected statistics
+        updated collector state
+    """
     
+    # ep = episode
+    # nb = number
+
     data = {
-        "ep_len": [],
-        "ep_ret": [],
+        "ep_len": [], # Length of episode
+        "ep_ret": [], # Return of episode
         "goals": [],
         "possible_actions": [],
         "actions": [],
         "prompts": [],
-        "ep_done": 0
+        "ep_done": 0 # Completed episodes
     }
     
+    # COLLECT STATES
+    # Initialize states: For each env, sample a goal and reset it (observations and goal)
     if state is None:
         results = [train_envs.reset_at(i, goal_sampler.sample()) for i in range(nb_envs)]
         observations, infos = zip(*results)
         infos = list_to_dict(infos)
-        observations = list(observations)
+        observations = list(observations) # Observation about the world (what is in the env, in the invent, ...)
         
         # For SR training and logs
         initial_states = [generate_prompt(_o, _g) for _o, _g in zip(observations, infos['goal'])]
         
         ep_ret, ep_len = np.zeros(nb_envs), np.zeros(nb_envs)
+    # While exploring, this variables are updated, here they are just used
     else:
         observations, infos = state['observations'], state['infos']
         ep_ret, ep_len = state['ep_ret'], state['ep_len']
         initial_states = state['initial_states']
     
+    # Each iteration advances all environments at once
     for _ in tqdm(range(nb_steps // nb_envs), ascii=" " * 9 + ">", ncols=100):
             
-        possible_actions = infos["possible_actions"]
+        possible_actions = infos["possible_actions"] # What the agent CAN do in this current state
         prompts = [generate_prompt(_o, _g) for _o, _g in zip(observations, infos['goal'])]
+        # Score actions to find the most suitable
         output = agent.custom_module_fns(['score'],
                                           contexts=prompts,
                                           candidates=possible_actions,
@@ -78,10 +106,16 @@ def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_e
         data["actions"].append(actions_command)
         data["prompts"].append(prompts)
             
+        # Run the commands, step to next state in each env
         observations, rewards, dones, _, infos = train_envs.step(actions_command)
 
         for i in range(nb_envs):
-            buffer.add(prompts[i], actions_command[i], rewards[i], generate_prompt(observations[i], infos['goal'][i]), dones[i], possible_actions[i])
+            buffer.add(prompts[i], # Current goal
+                       actions_command[i], 
+                       rewards[i], 
+                       generate_prompt(observations[i], infos['goal'][i]), # New goal
+                       dones[i], 
+                       possible_actions[i])
             ep_ret[i] += rewards[i]
             ep_len[i] += 1
             if dones[i]:
@@ -91,7 +125,7 @@ def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_e
                 ep_len[i], ep_ret[i] = 0, 0
                 data["goals"].append(initial_states[i])
                     
-                # Reset the environment
+                # Reset the environment (sample a new goal)
                 observation, info = train_envs.reset_at(i, goal_sampler.sample())
                 observations[i] = observation
                 initial_states[i] = generate_prompt(observations[i], info['goal'])
@@ -366,7 +400,7 @@ def main(config_args):
                                 adapters=config_args.magellan_args.sr_adapters
                             )
                 
-            # Update goal sampler state
+            # Update goal sampler state (params only relevant for OnlineSampler)
             goal_sampler_update_results = goal_sampler.update(goals=data['goals'], returns=data['ep_ret'])
             nb_updates += 1
                 

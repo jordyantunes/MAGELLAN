@@ -233,7 +233,15 @@ class EKOnlineGoalSampler(GoalSampler):
         
 
 class MAGELLANGoalSampler(GoalSampler):
-    
+    # PHILOSOPHY: If the sucess rate changes rapidly (LP is high), agent is learning about it and it is interesting. 
+    # Impossible and easy goals have low LP
+    # METHODS:
+    # Update Sampler iterates over while training:
+    # 1. Calculates Sucess Rate for a Delayed Version and a New Version of models for each goal
+    # 2. Calculates Learing Progress for each goal as new_sr - delayed_sr 
+    # 3. Reduces random sampling and increases LP sampling
+    # Sample a Goal: 
+    # - Random Goal or LP-based (goal with higher LP have more probability)
     def __init__(self, goals, agent, magellan_args):
         super().__init__(goals)
         
@@ -259,13 +267,16 @@ class MAGELLANGoalSampler(GoalSampler):
         sum_lp = np.sum(self.lp)       
         
         if np.random.rand() < self.epsilon or sum_lp == 0:
+            # Random exploration of goals with epsilon prob
             return self.values[np.random.randint(0, len(self.goals))]
         else:
+            # Goals with higher LP get sampled more often
             p = self.lp / sum_lp
             return self.goals[np.random.choice(self.keys, p=p)]
         
     def update(self, **kwargs):
         
+        # Standard exponential decay so sampling starts more random and becomes more based on lp with each step
         self.epsilon = self.epsilon_end + (self.epsilon_start - self.epsilon_end) * np.exp(-1. * self.step / self.epsilon_decay)
         self.step += 1
         
@@ -286,14 +297,17 @@ class MAGELLANGoalSampler(GoalSampler):
     def compute_lp(self, goals):
         
         # Compute delayed sr
+        ## load an older model snapshot or activate delayed weights?
         self.agent.update([""] * 8, [[""]] * 8, func='set_weights', idx=0)
         output = self.agent.custom_module_fns(['delayed'], contexts=goals, require_grad=False, peft_adapter='delayed_adapters')
         sr_delayed = F.sigmoid(torch.stack([_o['delayed'][0] for _o in output]).squeeze()).numpy()
+        # sr_delayed = [sr_goal1 (eg. 0.1), sr_goal2, ...] (older training)
         
         # Compute current sr
         output = self.agent.custom_module_fns([self.current_estimator_name], contexts=goals, require_grad=False, peft_adapter=self.sr_adapters)
         sr = F.sigmoid(torch.stack([_o[self.current_estimator_name][0] for _o in output]).squeeze()).numpy()
-        
+        # sr = [sr_goal1 (eg. 0.1), sr_goal2, ...] (new training)
+
         # Compute absolute lp
         lp = np.abs(sr - sr_delayed)
         
