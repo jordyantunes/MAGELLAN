@@ -1,0 +1,50 @@
+# EC2 Spot instance configuration for MAGELLAN training runs.
+# Fill in the REQUIRED fields before first use.
+
+aws:
+  region: eu-west-1                        # Change to your preferred region
+  key_pair: magellan-key                   # Name of your EC2 key pair
+  security_group_id: sg-XXXXXXXX           # REQUIRED: must allow inbound SSH (port 22)
+  iam_instance_profile: magellan-ec2-role  # REQUIRED: IAM role with S3 + ECR read access
+  subnet_id: ""  # Optional: leave empty to use the default subnet in any AZ
+
+instance:
+  # g5.2xlarge: 1x A10G (24 GB VRAM), 8 vCPUs — recommended; lamorel spawns multiple processes
+  # g5.xlarge:  1x A10G (24 GB VRAM), 4 vCPUs — tighter on CPU for multi-process lamorel
+  # g4dn.xlarge: 1x T4 (16 GB VRAM), ~$0.16/hr spot — cheaper alternative
+  # p3.2xlarge: 1x V100 (16 GB VRAM), faster for fp16 training
+  type: g5.2xlarge
+  spot_max_price: "0.60"   # USD/hr ceiling; leave empty "" to use on-demand price as cap
+
+  # Deep Learning Base AMI with Single CUDA (Ubuntu 24.04) — has NVIDIA drivers + Docker pre-installed.
+  # Preferred over the "OSS PyTorch" variant: we run everything in our own Docker image so there
+  # is no need for a pre-installed framework on the host. The AMI ID is region-specific.
+  # Look up the latest for your region:
+  #   aws ec2 describe-images --owners amazon \
+  #     --filters "Name=name,Values=Deep Learning Base AMI with Single CUDA (Ubuntu 24.04)*" \
+  #     --query "sort_by(Images,&CreationDate)[-1].ImageId" --output text
+  ami_id: ami-05880f965cc9d882a   # REQUIRED: region-specific Deep Learning AMI
+
+  volume_size_gb: 100      # Root volume; HF model cache can be large
+  instance_name: magellan-training
+
+docker:
+  # ECR image URI, e.g. 123456789.dkr.ecr.eu-west-1.amazonaws.com/magellan:latest
+  # Or a public Docker Hub image if you push there instead.
+  image: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/magellan:latest  # REQUIRED
+
+s3:
+  bucket: magellan-checkpoints   # REQUIRED: bucket must exist (create once with aws s3 mb)
+  prefix: checkpoints            # S3 key prefix; runs stored at {prefix}/{run_name}/
+
+training:
+  sampler: magellan              # random | magellan | online | ek_online
+  seed: 0
+  run_name: run-001              # Used as the S3 checkpoint subfolder
+  # Sync checkpoints to S3 every N seconds while training (0 = only on completion/interruption)
+  checkpoint_sync_interval: 300
+
+llm:
+  # Path inside the container where model weights are stored.
+  # Mount an EFS share or pre-bake weights into the AMI to avoid downloading on every launch.
+  model_path: /app/.cache/huggingface/flan-t5-base

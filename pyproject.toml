@@ -15,6 +15,12 @@ dependencies = [
     "transformers==4.44.2",
 ]
 
+[dependency-groups]
+aws = [
+    "boto3>=1.34",
+    "pyyaml>=6.0",
+]
+
 
 [tool.uv.sources]
 lamorel = { git = "https://github.com/jordyantunes/lamorel", subdirectory = "lamorel" }
