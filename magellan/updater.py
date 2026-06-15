@@ -234,7 +234,7 @@ class SACUpdater(BaseUpdater):
                 value_loss = value_loss / gradient_accumulation_steps
                 
                 value_loss_log += value_loss.item()
-                entropy_log.append(torch.mean(-torch.sum(action_probs * action_log_probs, dim=-1)))
+                entropy_log.append(torch.mean(-torch.sum(action_probs * action_log_probs.masked_fill(~mask, 0.0), dim=-1)))
                 
                 # Backward
                 value_loss.backward()

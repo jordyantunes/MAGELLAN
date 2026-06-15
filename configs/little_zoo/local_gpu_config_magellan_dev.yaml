@@ -77,3 +77,4 @@ magellan_args:
   recompute_freq: 32
   sr_adapters: sr_adapters
   train_llm: true
+  delay_depth: 6

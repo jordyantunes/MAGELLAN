@@ -318,8 +318,24 @@ def main(config_args):
                 eval_results.append((ep, eval_result))
                 if is_rl_process:
                     mlflow.log_metrics({f"eval/{k}": v for k, v in eval_result.items()}, step=ep)
-            
-                    
+
+            if use_magellan and is_rl_process:
+                if not hasattr(goal_sampler, '_diag_goals'):
+                    goal_sampler._diag_goals = {
+                        c: [g for g in test_goals['grasp'] + test_goals['grow_plants'] +
+                            test_goals['grow_herbivores'] + test_goals['grow_carnivores'] +
+                            test_goals['impossibles'] if c in g][:8]
+                        for c in ['grasp', 'grow_plants', 'grow_herbivores', 'grow_carnivores', 'impossibles']
+                    }
+                diag = {}
+                for cat, gs in goal_sampler._diag_goals.items():
+                    if gs:
+                        sr, sr_d, _ = goal_sampler.compute_lp(gs)
+                        diag[f"diag/sr_{cat}"] = float(sr.mean())
+                        diag[f"diag/sr_delayed_{cat}"] = float(sr_d.mean())
+                        diag[f"diag/raw_lp_{cat}"] = float(np.abs(sr - sr_d).mean())
+                mlflow.log_metrics(diag, step=ep)
+
         # Collect trajectories
         data, state = collect_trajectories(train_envs, agent, goal_sampler, rb, 
                                     config_args.rl_script_args.update_freq,

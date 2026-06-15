@@ -250,8 +250,9 @@ class MAGELLANGoalSampler(GoalSampler):
         self.sr_adapters = magellan_args.sr_adapters
         
         self.recompute_freq = magellan_args.recompute_freq
-        
-        self.agent.update([""] * 8, [[""]] * 8, func='update_buffer', buff_size=int(self.N / self.recompute_freq + 1))
+        self._buff_size = getattr(magellan_args, 'delay_depth', 3) + 1
+
+        self.agent.update([""] * 8, [[""]] * 8, func='update_buffer', buff_size=self._buff_size)
         self.sr, self.sr_delayed, self.lp = self.compute_lp(self.keys)
                 
     def sample(self):
@@ -270,7 +271,7 @@ class MAGELLANGoalSampler(GoalSampler):
         self.step += 1
         
         if self.step % self.recompute_freq == 0:
-            self.agent.update([""] * 8, [[""]] * 8, func='update_buffer', buff_size=int(self.N / self.recompute_freq + 1))
+            self.agent.update([""] * 8, [[""]] * 8, func='update_buffer', buff_size=self._buff_size)
             self.sr, self.sr_delayed, self.lp = self.compute_lp(self.keys)
         
         return {'sr': self.sr, 'sr_delayed': self.sr_delayed, 'lp': self.lp}
