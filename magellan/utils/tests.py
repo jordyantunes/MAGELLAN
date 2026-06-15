@@ -79,7 +79,7 @@ def test_policy(test_envs, test_goals, agent):
 def test_lp(test_goals, goal_sampler):
     result = {}
     for category in ('impossibles', 'grasp', 'grow_plants', 'grow_herbivores', 'grow_carnivores'):
-        sr, sr_delayed, lp = goal_sampler.compute_lp(list(np.random.choice(test_goals[category], 64, replace=False)))
+        sr, sr_delayed, lp = goal_sampler.compute_lp(list(np.random.choice(test_goals[category], 64, replace=True)))
         result['estimated_sr_' + category] = np.mean(sr)
         result['estimated_sr_delayed_' + category] = np.mean(sr_delayed)
         result['estimated_lp_' + category] = np.mean(lp)

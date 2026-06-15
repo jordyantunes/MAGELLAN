@@ -307,9 +307,9 @@ def main(config_args):
             if not config_args.rl_script_args.adaptation_test:
                 eval_result = test_policy(eval_envs, eval_goals, agent)
             if config_args.rl_script_args.goal_sampler == "magellan":
-                result.update(test_lp(test_goals, goal_sampler, config_args))
+                result.update(test_lp(test_goals, goal_sampler))
                 if not config_args.rl_script_args.adaptation_test:
-                    eval_result.update(test_lp(eval_goals, goal_sampler, config_args))
+                    eval_result.update(test_lp(eval_goals, goal_sampler))
             nb_test += 1
             test_results.append((ep, result))
             if is_rl_process:
