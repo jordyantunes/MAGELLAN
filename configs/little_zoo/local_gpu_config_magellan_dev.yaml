@@ -43,14 +43,14 @@ rl_script_args:
   a_lr: 1e-3
   minibatch_size: 256
   update_freq: 64
-  nb_updates: 1
+  nb_updates: 2              # 2 gradient steps per cycle; same peak VRAM (graph freed between steps)
   warmup_updates: 5
   buffer_size: 100000           # reduced from 500k; enough to verify replay logic
   n_steps: 3
   alpha: auto
 
   # rl training
-  number_envs: 32
+  number_envs: 64            # 2× envs → faster replay buffer fill; inference batches still chunked at minibatch_size
   num_episodes: 10000           # short run — enough to confirm the full pipeline works
   goal_sampler: magellan
   loading_path:

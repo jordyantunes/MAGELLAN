@@ -8,6 +8,7 @@ import numpy as np
 import os
 import pickle
 import random
+import subprocess
 import torch
 
 from collections import deque
@@ -151,7 +152,12 @@ def main(config_args):
         mlflow.set_experiment(config_args.rl_script_args.goal_sampler)
         mlflow.start_run(run_name=f"seed{seed}")
     if is_rl_process:
+        try:
+            git_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()
+        except Exception:
+            git_hash = "unknown"
         mlflow.log_params({
+            "git_commit": git_hash,
             "seed": seed,
             "goal_sampler": config_args.rl_script_args.goal_sampler,
             "model_path": config_args.lamorel_args.llm_args.model_path,
