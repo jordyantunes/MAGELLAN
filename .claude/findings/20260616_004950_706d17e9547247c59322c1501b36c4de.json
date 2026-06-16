@@ -1,0 +1,67 @@
+{
+  "run_id": "706d17e9547247c59322c1501b36c4de",
+  "start_time_str": "20260616_004950",
+  "recorded_at": "2026-06-16T00:00:00Z",
+  "params": {
+    "git_commit": "unknown",
+    "seed": "0",
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "100000",
+    "number_envs": "64",
+    "num_episodes": "10000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 0.09375,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.018734468147158623,
+    "test/estimated_lp_grow_plants": 0.01945759356021881,
+    "test/estimated_lp_grow_herbivores": 0.018233925104141235,
+    "test/estimated_lp_grow_carnivores": 0.01973712630569935,
+    "train/policy_loss": -0.11257902719080448,
+    "train/value_loss": 0.0016917130124056712,
+    "train/entropy": 1.4917526245117188,
+    "train/alpha": 0.01258066575974226
+  },
+  "summary": "First run with 64 envs (10k episodes, seed=0, buffer=100k). Grasp reached 100% faster (step 4003 vs 6015 in prior run). grow_plants reached 9.4% — first time any grow goal showed meaningful progress. LP estimates are now persistently nonzero (0.018-0.019 range) — the switch to 64 envs provided enough replay diversity for the SR head to learn. No entropy NaN.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grasp",
+      "description": "Reached 90%+ at step 2004, 100% at step 4003. Faster than 86722adf (step 6015) — 64 envs provides richer trajectories per update.",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grow_plants",
+      "description": "Reached 9.4% (first nonzero crossing >=5% at step 9002). First evidence of grow_plants learning. Max 9.4% — not enough episodes to push further.",
+      "recommendation": "Extend to 40k episodes to see if grow_plants continues improving. Confirmed in b5452f4a (reaches 100%)."
+    },
+    {
+      "category": "sr_head",
+      "severity": "EXPECTED",
+      "metric": "test/estimated_lp_*",
+      "description": "LP estimates are persistently nonzero at end (~0.018-0.020 for all goal types). The 64-env change unlocked LP signal that was absent at 32 envs. All types have similar LP — suggests SR head is detecting some learning potential across the board.",
+      "recommendation": null
+    },
+    {
+      "category": "stability",
+      "severity": "EXPECTED",
+      "metric": "train/entropy",
+      "description": "Finite, rose from 0.091 to 1.49. Value loss 0.0017 — well converged. No issues.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "vs. 86722adf: switching from 32→64 envs unlocked LP signal (0.0→0.019) and grow_plants started learning (0%→9.4%). Grasp also faster (6015→4003). The 64-env change is the key config difference."
+}

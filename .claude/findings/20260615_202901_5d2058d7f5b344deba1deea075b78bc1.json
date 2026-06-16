@@ -1,0 +1,66 @@
+{
+  "run_id": "5d2058d7f5b344deba1deea075b78bc1",
+  "start_time_str": "20260615_202901",
+  "recorded_at": "2026-06-16T00:00:00Z",
+  "params": {
+    "seed": "0",
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "100000",
+    "number_envs": "32",
+    "num_episodes": "10000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.0,
+    "test/estimated_lp_grow_plants": 0.0,
+    "test/estimated_lp_grow_herbivores": 0.0,
+    "test/estimated_lp_grow_carnivores": 0.0,
+    "train/policy_loss": -0.12721780128777027,
+    "train/value_loss": 0.003142767265671864,
+    "train/entropy": null,
+    "train/alpha": 0.02178468368947506
+  },
+  "summary": "First successful MAGELLAN run (10k episodes, seed=0, buffer=100k, 32 envs). Grasp reached 100% at step 5005 (slower than later runs). All grow_* goals stayed at 0%. Entropy NaN present throughout — the entropy bug was active, corrupting alpha tuning and LP signal. All estimated_lp values ended at 0.0 despite brief nonzero readings mid-run, suggesting the NaN entropy interfered with SR head training.",
+  "findings": [
+    {
+      "category": "stability",
+      "severity": "BUG",
+      "metric": "train/entropy",
+      "description": "Entropy is NaN at end of run (has_nan=true). Padded action log-probs are unmasked in updater.py, causing NaN to propagate into the entropy estimate and alpha gradient.",
+      "recommendation": "Fixed in 86722adf. Check updater.py mask logic."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grasp",
+      "description": "Reached 100% at step 5005. Slower than later runs (4003 in 706d17e9, 4002 in b5452f4a) — entropy NaN may have disrupted early learning.",
+      "recommendation": null
+    },
+    {
+      "category": "sr_head",
+      "severity": "BUG",
+      "metric": "test/estimated_lp_*",
+      "description": "All LP estimates ended at 0.0 (only 4 nonzero readings mid-run). LP signal is not persisting — likely corrupted by entropy NaN affecting SR head gradients.",
+      "recommendation": "Verify after entropy fix. In 86722adf (entropy fixed), LP is similarly 0 at end — deeper issue with LP threshold or SR head."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grow_plants",
+      "description": "0% at end. Expected — grow_plants requires chain actions and 10k episodes is insufficient even without bugs.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "First run with metrics after two startup crashes. Established baseline: grasp is learnable, but entropy NaN bug is present and LP signal is not working."
+}

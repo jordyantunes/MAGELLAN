@@ -1,0 +1,66 @@
+{
+  "run_id": "86722adf6ae74b30b434deaf01b2bf1a",
+  "start_time_str": "20260615_225445",
+  "recorded_at": "2026-06-16T00:00:00Z",
+  "params": {
+    "seed": "0",
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "100000",
+    "number_envs": "32",
+    "num_episodes": "10000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.0,
+    "test/estimated_lp_grow_plants": 0.0,
+    "test/estimated_lp_grow_herbivores": 0.0,
+    "test/estimated_lp_grow_carnivores": 0.0,
+    "train/policy_loss": -0.14245769381523132,
+    "train/value_loss": 0.009128352394327521,
+    "train/entropy": 1.5185954570770264,
+    "train/alpha": 0.02349405735731125
+  },
+  "summary": "Entropy NaN bug fixed (10k episodes, seed=0, buffer=100k, 32 envs). Grasp reached 100% at step 6015 — slightly slower than prior run despite the fix (entropy starting at 0.09 then recovering to 1.52). All grow_* goals stayed at 0%. LP estimates still ended at 0.0 despite brief nonzero readings — the LP signal issue is separate from the entropy NaN bug.",
+  "findings": [
+    {
+      "category": "stability",
+      "severity": "EXPECTED",
+      "metric": "train/entropy",
+      "description": "Entropy is finite throughout (no NaN — bug fixed vs 5d2058d7). Rose from 0.079 to 1.52. Value loss ended at 0.009 — slightly high, may not have fully converged within 10k episodes.",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grasp",
+      "description": "Reached 100% at step 6015 — slightly slower than 5d2058d7 (step 5005) despite fixing the entropy bug. Grasp volatility: n_collapses=0, fraction_above_last_quarter=1.0 — stably learned.",
+      "recommendation": null
+    },
+    {
+      "category": "sr_head",
+      "severity": "INVESTIGATE",
+      "metric": "test/estimated_lp_*",
+      "description": "All LP estimates ended at 0.0 despite 4-5 nonzero readings mid-run. LP signal is not persisting even after entropy fix. Possible causes: LP threshold too aggressive, SR head not learning per-goal features, or insufficient replay diversity at 10k episodes.",
+      "recommendation": "Check if LP stays nonzero with 64 envs (more diverse replay) and longer runs. Confirmed working in 706d17e9 with 64 envs."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grow_plants",
+      "description": "0% at end. Expected at 10k episodes with 32 envs.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "vs. 5d2058d7: entropy NaN fixed — entropy rises cleanly from 0.079 to 1.52. Grasp still learned. LP signal still 0 at end — confirms LP issue is independent of entropy NaN. Same config (32 envs, buffer=100k)."
+}

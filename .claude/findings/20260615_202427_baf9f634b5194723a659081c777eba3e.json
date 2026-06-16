@@ -1,0 +1,32 @@
+{
+  "run_id": "baf9f634b5194723a659081c777eba3e",
+  "start_time_str": "20260615_202427",
+  "recorded_at": "2026-06-16T00:00:00Z",
+  "params": {
+    "seed": "0",
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "100000",
+    "number_envs": "32",
+    "num_episodes": "10000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]"
+  },
+  "final_metrics": {},
+  "summary": "Second aborted run (~2 min wall time, no metrics logged). Same config as f6d26fd6. Crashed before completing any training episodes.",
+  "findings": [
+    {
+      "category": "config",
+      "severity": "BUG",
+      "metric": null,
+      "description": "Run lasted only ~2 minutes with no metrics logged. Second consecutive crash on the same config — confirmed startup-level bug, not a fluke.",
+      "recommendation": "Fixed in the next run (5d2058d7) — compare configs or git history to identify the fix."
+    }
+  ],
+  "comparison": "Identical crash to f6d26fd6 — same config, same ~2 min runtime, zero metrics. Two consecutive failures suggest a systematic startup bug that was subsequently fixed."
+}

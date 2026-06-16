@@ -1,0 +1,81 @@
+{
+  "run_id": "b5452f4a09314a3ca583602c92a18a3a",
+  "start_time_str": "20260616_122711",
+  "recorded_at": "2026-06-16T00:00:00Z",
+  "params": {
+    "git_commit": "unknown",
+    "seed": "0",
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "250000",
+    "number_envs": "64",
+    "num_episodes": "40000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 1.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.056553006172180176,
+    "test/estimated_lp_grow_plants": 0.042154282331466675,
+    "test/estimated_lp_grow_herbivores": 0.03787241876125336,
+    "test/estimated_lp_grow_carnivores": 0.03970889747142792,
+    "train/policy_loss": -0.18128735944628716,
+    "train/value_loss": 0.0031933007758198073,
+    "train/entropy": 1.3474923372268677,
+    "train/alpha": 0.0016157814534381032
+  },
+  "summary": "First 40k-episode MAGELLAN run (seed=0, buffer=250k, 64 envs). Grasp reached 100% at step 4002 (consistent with 706d17e9). grow_plants first crossed 100% at step 24013 but showed 3 collapses back below 50%, with fraction_above_last_quarter=0.6 — not yet stably solved despite the final value reading 1.0. grow_herbivores and grow_carnivores remain at 0%. Alpha collapsed to 0.0016 but entropy climbed to 1.35. No diag metrics present.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grasp",
+      "description": "Reached 100% at step 4002. Stable: n_collapses=0, fraction_above_last_quarter=1.0.",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "INVESTIGATE",
+      "metric": "test/grow_plants",
+      "description": "First crossed 100% at step 24013 but showed 3 collapses below 50% (min_after_first_crossing=0.047 — near catastrophic forgetting). fraction_above_last_quarter=0.6 means still oscillating in the final 10k episodes. The final_metrics value of 1.0 is misleading — it reflects the last measurement point, not stable mastery.",
+      "recommendation": "Run 80-100k episodes to see if grow_plants stabilizes. Consider whether alpha collapse (0.0016) is reducing the exploration needed to stay consistent on grow_plants."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grow_herbivores, test/grow_carnivores",
+      "description": "Both 0%. grow_plants itself only intermittently solved — herbivore/carnivore chain goals require grow_plants as a prerequisite, so 0% is expected.",
+      "recommendation": "Need grow_plants to be stably solved first, then extend run length."
+    },
+    {
+      "category": "stability",
+      "severity": "INVESTIGATE",
+      "metric": "train/alpha",
+      "description": "Alpha decayed to 0.0016 early but entropy climbed to 1.35. Near-zero temperature means the policy is not being pushed to explore by SAC's entropy bonus — the grow_plants oscillation may be related.",
+      "recommendation": "Try setting a minimum alpha floor (e.g. 0.01) to maintain some exploration pressure on the harder goals."
+    },
+    {
+      "category": "stability",
+      "severity": "EXPECTED",
+      "metric": "train/entropy",
+      "description": "Finite, no NaN. Rose from 0.091 to 1.35 despite near-zero alpha — policy naturally diversified as it tackled grow_plants.",
+      "recommendation": null
+    },
+    {
+      "category": "sr_head",
+      "severity": "INVESTIGATE",
+      "metric": "test/estimated_lp_*",
+      "description": "LP estimates are non-zero for all goal types including herbivores (0.038) and carnivores (0.040), but those goals were never solved. No diag/sr_impossibles or raw_lp metrics to verify SR head quality.",
+      "recommendation": "Enable diag metrics in next run. Check if LP for herbivores rose after grow_plants succeeded (around step 24k+)."
+    }
+  ],
+  "comparison": "vs. 706d17e9 (10k, buffer=100k): grow_plants jumped from 9.4% to nominally 100% but with significant volatility (3 collapses). Grasp speed unchanged (~4002). Buffer increased 100k→250k. Key finding: grow_plants is learnable at 40k but not yet stable — more episodes or higher alpha floor needed."
+}
