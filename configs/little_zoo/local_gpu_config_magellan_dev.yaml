@@ -45,13 +45,13 @@ rl_script_args:
   update_freq: 64
   nb_updates: 2              # 2 gradient steps per cycle; same peak VRAM (graph freed between steps)
   warmup_updates: 5
-  buffer_size: 100000           # reduced from 500k; enough to verify replay logic
+  buffer_size: 250000           # 250k: ~16 update-cycle turnover at 40k episodes; balances diversity vs. RAM
   n_steps: 3
   alpha: auto
 
   # rl training
   number_envs: 64            # 2× envs → faster replay buffer fill; inference batches still chunked at minibatch_size
-  num_episodes: 10000           # short run — enough to confirm the full pipeline works
+  num_episodes: 40000           # ~10h; long enough to observe grow_herbivores learning progress
   goal_sampler: magellan
   loading_path:
   adaptation_test: false
