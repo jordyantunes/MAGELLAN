@@ -51,7 +51,7 @@ rl_script_args:
 
   # rl training
   number_envs: 64            # 2× envs → faster replay buffer fill; inference batches still chunked at minibatch_size
-  num_episodes: 40000           # ~10h; long enough to observe grow_herbivores learning progress
+  num_episodes: 80000           # ~10h; long enough to observe grow_herbivores learning progress
   goal_sampler: magellan
   loading_path:
   adaptation_test: false

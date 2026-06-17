@@ -1,0 +1,81 @@
+{
+  "run_id": "2b60142f19c94a9184be592d0aa2e250",
+  "start_time_str": "20260616_235350",
+  "recorded_at": "2026-06-17T00:00:00Z",
+  "params": {
+    "git_commit": "unknown",
+    "seed": "0",
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "250000",
+    "number_envs": "64",
+    "num_episodes": "80000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 1.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.0,
+    "test/estimated_lp_grow_plants": 0.0,
+    "test/estimated_lp_grow_herbivores": 0.0,
+    "test/estimated_lp_grow_carnivores": 0.0,
+    "train/policy_loss": -0.09466,
+    "train/value_loss": 0.001003,
+    "train/entropy": 0.6090,
+    "train/alpha": 5.76e-05
+  },
+  "summary": "80k-episode MAGELLAN run (seed=0, buffer=250k, 64 envs) — the double-length continuation of b5452f4a. Grasp solved at ep 3002 and rock-solid (0 collapses). grow_plants stabilized (fraction_above_last_quarter=0.95 vs 0.6 in the 40k run) despite 5 total collapses during learning. grow_herbivores and grow_carnivores stayed at 0% with max peaks of only 1.6%. The LP signal is completely dead at the end — all estimated_lp values collapsed to 0, signalling the delayed SR head caught up on all goals including unsolved ones, leaving no guidance to drive sampling of harder goals.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grasp",
+      "description": "Reached 100% at ep 3002 (slightly faster than 40k run's ep 4002). Zero collapses, min_after_first_crossing=0.969, fraction_above_last_quarter=1.0. Fully stable.",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grow_plants",
+      "description": "Reached 100% at ep 28001. Five collapses during learning (vs 3 in 40k run) including one to 0.0, but recovered: fraction_above_last_quarter=0.95. Confirms the 40k run's prediction — more episodes stabilized grow_plants mastery.",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "INVESTIGATE",
+      "metric": "test/grow_herbivores, test/grow_carnivores",
+      "description": "Both ended at 0%. Max ever reached was 1.56% (grow_herbivores ep 13004, grow_carnivores ep 19000). grow_plants has been stably mastered since ~ep 35k, yet the chain goals never progressed — the bottleneck shifted from grow_plants instability to lack of sampling pressure on harder goals.",
+      "recommendation": "The LP signal died completely (see sr_head finding). Need LP to stay nonzero on harder goals to drive sampling. Consider lowering the LP threshold in goal_sampler.py:301 from 0.01 or investigating why the delayed weights caught up on unsolved goals."
+    },
+    {
+      "category": "sr_head",
+      "severity": "INVESTIGATE",
+      "metric": "test/estimated_lp_*",
+      "description": "All LP values are 0 at end of run. Total nonzero counts are only 63-68 steps each (out of ~80k), first appearing at ep 1011 then permanently collapsing. In the prior 40k run LP values were still nonzero (0.038-0.056) at the end. The LP dying completely means the delayed SR head has caught up to the current head on ALL goals — including the unsolved herbivores/carnivores — so MAGELLAN has no signal to preferentially sample harder goals.",
+      "recommendation": "Enable diag/sr_impossibles and diag/raw_lp_* metrics to distinguish whether (a) the SR head genuinely learned the same prediction for solved/unsolved goals, or (b) the 0.01 LP threshold in goal_sampler.py:301 is suppressing real signal. Also consider increasing the delayed weights buffer depth to slow down the catching-up of the delayed head."
+    },
+    {
+      "category": "stability",
+      "severity": "EXPECTED",
+      "metric": "train/alpha",
+      "description": "Alpha further collapsed from 0.0016 (at 40k) to 5.76e-05. With both grasp and grow_plants solved, the policy became near-deterministic on those goals and auto-alpha correctly drove temperature toward zero. Entropy fell from 1.35 to 0.609 correspondingly.",
+      "recommendation": null
+    },
+    {
+      "category": "stability",
+      "severity": "EXPECTED",
+      "metric": "train/entropy, train/value_loss",
+      "description": "No NaN in entropy. value_loss stable and low (0.001). policy_loss negative (-0.095) — expected for SAC. Training numerically healthy.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "vs. b5452f4a (40k, same config): grow_plants stabilized as predicted (fraction 0.6→0.95). Grasp unchanged. The key regression: LP that was alive (0.038-0.056) at the end of the 40k run is completely dead (0.0) by end of 80k — the delayed SR head caught up on all goals, killing the exploration signal for herbivores/carnivores. More episodes alone won't unlock the next tier; the LP mechanism needs fixing."
+}
