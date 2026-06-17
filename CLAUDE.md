@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Research paper
+
+The paper describing this system is saved locally at `docs/magellan_paper.html` with a structured outline and search index at `docs/magellan_paper_outline.md`. Key sections for implementation reference:
+- **§3.2 + Appendix C.2** — MAGELLAN algorithm and hyperparameters (Table 6)
+- **Appendix C.1 + Table 5** — SAC hyperparameters and LoRA/adapter setup
+- **Appendix A** — Little-Zoo environment mechanics and goal space construction
+- **§4 + Appendix D** — Experimental results and baselines to compare against
+
 ## What this project does
 
 MAGELLAN (MetAcognitive GEneralization of Learning progress in LANguage model agents) trains LLM-based RL agents on the [LittleZoo](https://github.com/flowersteam/littlezoo) environment using Soft Actor-Critic (SAC). The key innovation is the goal sampler: instead of picking goals randomly, MAGELLAN estimates per-goal Learning Progress (LP) — the absolute change in predicted success rate between a delayed and current SR estimator — and biases sampling toward goals where the agent is improving.

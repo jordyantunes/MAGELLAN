@@ -66,14 +66,32 @@ Analyse the JSON output and produce findings across these dimensions:
 **Run config**
 - Note key params: `goal_sampler`, `num_episodes`, `gradient_batch_size`, `buffer_size`, `seed`.
 
-### 4. Classify issues
+### 4. Compare against paper benchmarks
+
+Consult `docs/paper_benchmarks.md` for extracted chart data (D.2 competence estimation, D.3 per-category SR, D.4 test-set generalization). Use the **Summary table** at the bottom of that file to classify each metric.
+
+**Key checks:**
+- Episode at which `test/grasp` and `test/grow_plants` cross 0.9 — compare to ON_TRACK range in table
+- Final `test/grow_herbivores` and `test/grow_carnivores` vs. expected range for this run length (grow_carnivores is still converging at 500k in the paper — short runs should be labelled EXPECTED, not BELOW_PAPER)
+- `diag/sr_impossibles` — should fall toward 0 by ~50k ep; >0.20 signals the SR head is not learning per-goal features
+- Competence tracking on test goals: MAGELLAN should track observed SR within ±0.15; flat-zero estimate on grow_* indicates generalization failure (Online-ALP failure mode)
+- LP signal: spike-then-collapse on grasp is expected once SR saturates; LP never rising on grow_* in runs <50k is also expected
+
+Label each comparison as:
+- `ABOVE_PAPER` — metric exceeds or reaches target faster than paper reports
+- `ON_TRACK` — consistent with paper trajectory given run length
+- `BELOW_PAPER` — underperforming vs. paper; note possible cause
+
+Add these comparisons as findings with category `paper_comparison`.
+
+### 5. Classify all issues
 
 Label each finding as one of:
 - `BUG` — confirmed code defect (e.g. entropy NaN, wrong mask)
 - `EXPECTED` — known limitation of run length or task difficulty
 - `INVESTIGATE` — ambiguous; needs another run or more data to confirm
 
-### 5. Save findings
+### 6. Save findings
 
 Findings files are named `<start_time_str>_<run_id>.json` where `start_time_str` comes from the `start_time_str` field in the `--summary` output (format: `YYYYMMDD_HHMMSS`, UTC). This makes files sort chronologically by experiment order.
 
@@ -89,14 +107,15 @@ Write (or overwrite) it with this structure:
   "summary": "<2-3 sentence plain-English summary of what this run showed>",
   "findings": [
     {
-      "category": "policy_learning | sr_head | stability | config",
-      "severity": "BUG | EXPECTED | INVESTIGATE",
+      "category": "policy_learning | sr_head | stability | config | paper_comparison",
+      "severity": "BUG | EXPECTED | INVESTIGATE | ABOVE_PAPER | ON_TRACK | BELOW_PAPER",
       "metric": "<metric name or null>",
       "description": "<what was observed>",
       "recommendation": "<what to try next, or null>"
     }
   ],
-  "comparison": "<if a previous findings file existed: 1-2 sentences on what changed vs that run, else null>"
+  "comparison": "<if a previous findings file existed: 1-2 sentences on what changed vs that run, else null>",
+  "paper_vs_run": "<1-2 sentences summarising how this run compares to the paper's reported results overall>"
 }
 ```
 
@@ -108,10 +127,11 @@ uv run .claude/skills/check-metrics/mlflow_metrics.py --changelog
 
 This rewrites `.claude/findings/CHANGELOG.md` from all findings files in chronological order.
 
-### 6. Report to user
+### 7. Report to user
 
 Output:
 1. One-paragraph plain-English interpretation of the run
 2. Findings table (category | severity | metric | description)
-3. Path to the saved findings file
-4. If a previous run was compared: what changed
+3. Paper comparison: how key metrics compare to the paper's reported results (Figure 5, Table 2)
+4. Path to the saved findings file
+5. If a previous run was compared: what changed
