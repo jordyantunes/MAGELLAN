@@ -2,28 +2,27 @@
 # Fill in the REQUIRED fields before first use.
 
 aws:
-  region: eu-west-1                        # Change to your preferred region
-  key_pair: magellan-key                   # Name of your EC2 key pair
-  security_group_id: sg-XXXXXXXX           # REQUIRED: must allow inbound SSH (port 22)
+  region: us-east-1
+  key_pair: magellan-test                   # Name of your EC2 key pair
+  security_group_id: sg-0ba0939b85ad21df4
   iam_instance_profile: magellan-ec2-role  # REQUIRED: IAM role with S3 + ECR read access
   subnet_id: ""  # Optional: leave empty to use the default subnet in any AZ
 
 instance:
-  # g5.2xlarge: 1x A10G (24 GB VRAM), 8 vCPUs — recommended; lamorel spawns multiple processes
-  # g5.xlarge:  1x A10G (24 GB VRAM), 4 vCPUs — tighter on CPU for multi-process lamorel
+  # g5.xlarge:   1x A10G (24 GB VRAM), 4 vCPUs — recommended; RL process is not CPU-bound
+  # g5.2xlarge:  1x A10G (24 GB VRAM), 8 vCPUs — only worth it for running 2 seeds in parallel
   # g4dn.xlarge: 1x T4 (16 GB VRAM), ~$0.16/hr spot — cheaper alternative
-  # p3.2xlarge: 1x V100 (16 GB VRAM), faster for fp16 training
-  type: g5.2xlarge
-  spot_max_price: "0.60"   # USD/hr ceiling; leave empty "" to use on-demand price as cap
+  # p3.2xlarge:  1x V100 (16 GB VRAM), faster for fp16 training
+  type: g5.xlarge
+  spot_max_price: # "0.40"   # USD/hr ceiling; leave empty "" to use on-demand price as cap
 
-  # Deep Learning Base AMI with Single CUDA (Ubuntu 24.04) — has NVIDIA drivers + Docker pre-installed.
-  # Preferred over the "OSS PyTorch" variant: we run everything in our own Docker image so there
-  # is no need for a pre-installed framework on the host. The AMI ID is region-specific.
+  # Deep Learning Base AMI with Single CUDA (Amazon Linux 2023) — has NVIDIA drivers + Docker pre-installed.
+  # SSH user is ec2-user (not ubuntu). AMI ID is region-specific.
   # Look up the latest for your region:
   #   aws ec2 describe-images --owners amazon \
-  #     --filters "Name=name,Values=Deep Learning Base AMI with Single CUDA (Ubuntu 24.04)*" \
+  #     --filters "Name=name,Values=Deep Learning Base AMI with Single CUDA (Amazon Linux 2023)*" \
   #     --query "sort_by(Images,&CreationDate)[-1].ImageId" --output text
-  ami_id: ami-05880f965cc9d882a   # REQUIRED: region-specific Deep Learning AMI
+  ami_id: ami-021ed41998997107c  # REQUIRED: region-specific Deep Learning AMI
 
   volume_size_gb: 100      # Root volume; HF model cache can be large
   instance_name: magellan-training
@@ -31,10 +30,10 @@ instance:
 docker:
   # ECR image URI, e.g. 123456789.dkr.ecr.eu-west-1.amazonaws.com/magellan:latest
   # Or a public Docker Hub image if you push there instead.
-  image: ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/magellan:latest  # REQUIRED
+  image: 075483721155.dkr.ecr.us-east-1.amazonaws.com/magellan
 
 s3:
-  bucket: magellan-checkpoints   # REQUIRED: bucket must exist (create once with aws s3 mb)
+  bucket: magellan-checkpoints-use1   # REQUIRED: bucket must exist (create once with aws s3 mb)
   prefix: checkpoints            # S3 key prefix; runs stored at {prefix}/{run_name}/
 
 training:

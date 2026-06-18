@@ -53,7 +53,7 @@ def trigger_remote_sync(public_ip: str, key_pair: str, run_name: str,
     ssh_cmd = [
         "ssh", "-o", "StrictHostKeyChecking=no",
         "-i", f"~/.ssh/{key_pair}.pem",
-        f"ubuntu@{public_ip}",
+        f"ec2-user@{public_ip}",
         cmd,
     ]
     print(f"Running remote sync: {cmd}")

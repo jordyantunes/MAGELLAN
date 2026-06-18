@@ -15,8 +15,8 @@ SEED="__SEED__"
 SYNC_INTERVAL="__SYNC_INTERVAL__"
 
 S3_RUN_PATH="s3://${BUCKET}/${S3_PREFIX}/${RUN_NAME}"
-LOCAL_OUTPUTS="/home/ubuntu/outputs"
-LOCAL_HF_CACHE="/home/ubuntu/hf_cache"
+LOCAL_OUTPUTS="/home/ec2-user/outputs"
+LOCAL_HF_CACHE="/home/ec2-user/hf_cache"
 
 mkdir -p "$LOCAL_OUTPUTS" "$LOCAL_HF_CACHE"
 
@@ -30,6 +30,9 @@ if echo "$DOCKER_IMAGE" | grep -q "\.ecr\."; then
 fi
 
 docker pull "$DOCKER_IMAGE"
+
+# Install MLflow for the UI server (lightweight, host-side only)
+pip install --quiet mlflow
 
 # ---------------------------------------------------------------------------
 # 2. Sync latest checkpoint from S3 (if any)
@@ -57,7 +60,7 @@ fi
 # ---------------------------------------------------------------------------
 case "$SAMPLER" in
     random)    CONFIG_NAME="local_gpu_config_random"    ;;
-    magellan)  CONFIG_NAME="local_gpu_config_magellan"  ;;
+    magellan)  CONFIG_NAME="aws_g5_magellan"             ;;
     online)    CONFIG_NAME="local_gpu_config_online"    ;;
     ek_online) CONFIG_NAME="local_gpu_config_ek_online" ;;
     *)
@@ -69,9 +72,16 @@ esac
 # ---------------------------------------------------------------------------
 # 4. Spot interruption handler — syncs outputs before the instance is reclaimed
 # ---------------------------------------------------------------------------
+sync_to_s3() {
+    aws s3 sync "${LOCAL_OUTPUTS}/${RUN_NAME}/" "${S3_RUN_PATH}/"
+    # mlflow.db lives one level above the run dir — sync it to the bucket root
+    [ -f "${LOCAL_OUTPUTS}/mlflow.db" ] && \
+        aws s3 cp "${LOCAL_OUTPUTS}/mlflow.db" "s3://${BUCKET}/${S3_PREFIX}/mlflow.db" || true
+}
+
 handle_interruption() {
     echo "Spot interruption notice received — syncing outputs to S3"
-    aws s3 sync "${LOCAL_OUTPUTS}/${RUN_NAME}/" "${S3_RUN_PATH}/"
+    sync_to_s3
     echo "Sync complete. Instance will be terminated shortly."
 }
 
@@ -99,7 +109,7 @@ if [ "$SYNC_INTERVAL" -gt 0 ]; then
         while true; do
             sleep "$SYNC_INTERVAL"
             echo "Periodic sync to ${S3_RUN_PATH}/"
-            aws s3 sync "${LOCAL_OUTPUTS}/${RUN_NAME}/" "${S3_RUN_PATH}/" || true
+            sync_to_s3 || true
         done
     }
     periodic_sync &
@@ -129,6 +139,18 @@ if [ -n "$LOADING_PATH_ARG" ]; then
     DOCKER_CMD+=("$LOADING_PATH_ARG")
 fi
 
+# ---------------------------------------------------------------------------
+# 6b. Start MLflow UI server (port 5000, accessible via the instance's public IP)
+# ---------------------------------------------------------------------------
+mlflow server \
+    --host 0.0.0.0 \
+    --port 5000 \
+    --backend-store-uri "sqlite:///${LOCAL_OUTPUTS}/mlflow.db" \
+    --no-serve-artifacts \
+    &
+MLFLOW_PID=$!
+echo "MLflow UI started (PID ${MLFLOW_PID}) — http://<instance-ip>:5000"
+
 echo "Starting training: ${DOCKER_CMD[*]}"
 "${DOCKER_CMD[@]}" && EXIT_CODE=0 || EXIT_CODE=$?
 
@@ -137,7 +159,8 @@ echo "Starting training: ${DOCKER_CMD[*]}"
 # ---------------------------------------------------------------------------
 kill "$POLL_PID" 2>/dev/null || true
 [ -n "${SYNC_PID:-}" ] && kill "$SYNC_PID" 2>/dev/null || true
+kill "$MLFLOW_PID" 2>/dev/null || true
 
 echo "Training finished (exit code ${EXIT_CODE}) — final sync to S3"
-aws s3 sync "${LOCAL_OUTPUTS}/${RUN_NAME}/" "${S3_RUN_PATH}/"
+sync_to_s3
 echo "Done."

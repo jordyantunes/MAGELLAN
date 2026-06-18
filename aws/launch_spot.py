@@ -83,7 +83,7 @@ def request_spot_instance(cfg: dict, user_data: str, dry_run: bool) -> dict | No
         "SpotInstanceType": "one-time",
         "InstanceInterruptionBehavior": "terminate",
     }
-    max_price = instance_cfg.get("spot_max_price", "").strip()
+    max_price = str(instance_cfg.get("spot_max_price") or "").strip()
     if max_price:
         spot_options["MaxPrice"] = max_price
 
@@ -182,10 +182,10 @@ def main() -> None:
     key_pair = cfg["aws"]["key_pair"]
     print()
     print("=== Connect ===")
-    print(f"  ssh -i ~/.ssh/{key_pair}.pem ubuntu@{public_ip}")
+    print(f"  ssh -i ~/.ssh/{key_pair}.pem ec2-user@{public_ip}")
     print()
     print("=== Monitor training log ===")
-    print(f"  ssh -i ~/.ssh/{key_pair}.pem ubuntu@{public_ip} 'tail -f /var/log/magellan-init.log'")
+    print(f"  ssh -i ~/.ssh/{key_pair}.pem ec2-user@{public_ip} 'tail -f /var/log/magellan-init.log'")
     print()
     print("=== Terminate when done ===")
     print(f"  python aws/terminate_spot.py --instance-id {instance_id}")
