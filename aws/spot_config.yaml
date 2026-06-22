@@ -7,6 +7,11 @@ aws:
   security_group_id: sg-0ba0939b85ad21df4
   iam_instance_profile: magellan-ec2-role  # REQUIRED: IAM role with S3 + ECR read access
   subnet_id: ""  # Optional: leave empty to use the default subnet in any AZ
+  # IAM role for the Spot Fleet service itself (not the instance profile).
+  # Leave empty (recommended) — launch_spot.py will auto-create and use the
+  # standard AWS service-linked role (AWSServiceRoleForEC2SpotFleet).
+  # Only set this if you need to use a custom role.
+  fleet_role_arn: ""
 
 instance:
   # g5.xlarge:   1x A10G (24 GB VRAM), 4 vCPUs — recommended; RL process is not CPU-bound
@@ -24,7 +29,7 @@ instance:
   #     --query "sort_by(Images,&CreationDate)[-1].ImageId" --output text
   ami_id: ami-021ed41998997107c  # REQUIRED: region-specific Deep Learning AMI
 
-  volume_size_gb: 100      # Root volume; HF model cache can be large
+  volume_size_gb: 200      # Root volume; HF model cache can be large
   instance_name: magellan-training
 
 docker:

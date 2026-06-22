@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """
-Launch an EC2 spot instance for a MAGELLAN training run.
+Launch an EC2 Spot Fleet for a MAGELLAN training run.
+
+The fleet runs with Type=maintain so AWS automatically replaces a terminated
+spot instance with a new one. The new instance resumes from the latest S3
+checkpoint via user_data.tpl.sh.
 
 Usage:
     python aws/launch_spot.py                          # uses spot_config.yaml
@@ -12,7 +16,9 @@ Usage:
 
 import argparse
 import base64
+import json
 import sys
+import time
 from pathlib import Path
 
 import boto3
@@ -28,7 +34,8 @@ def load_config(path: Path) -> dict:
 
 
 def build_user_data(cfg: dict, sampler: str, seed: int, run_name: str) -> str:
-    template = (Path(__file__).parent / "user_data.sh").read_text()
+    template = (Path(__file__).parent / "user_data.tpl.sh").read_text()
+    compose_content = (Path(__file__).parent.parent / "docker-compose.aws.yml").read_text()
     replacements = {
         "__BUCKET__": cfg["s3"]["bucket"],
         "__S3_PREFIX__": cfg["s3"]["prefix"],
@@ -38,38 +45,96 @@ def build_user_data(cfg: dict, sampler: str, seed: int, run_name: str) -> str:
         "__SAMPLER__": sampler,
         "__SEED__": str(seed),
         "__SYNC_INTERVAL__": str(cfg["training"]["checkpoint_sync_interval"]),
+        "__DOCKER_COMPOSE_CONTENT__": compose_content,
     }
     for placeholder, value in replacements.items():
         template = template.replace(placeholder, value)
     return template
 
 
-def request_spot_instance(cfg: dict, user_data: str, dry_run: bool) -> dict | None:
-    ec2 = boto3.client("ec2", region_name=cfg["aws"]["region"])
+def get_subnet_ids(cfg: dict) -> str | None:
+    """Return subnet ID(s) for the launch spec.
 
+    If subnet_id is set in config, use it as-is. Otherwise auto-discover all
+    subnets in the default VPC and return them as a comma-separated list so
+    Spot Fleet can pick whichever AZ has capacity.
+    """
+    subnet = cfg["aws"].get("subnet_id", "").strip()
+    if subnet:
+        return subnet
+    ec2 = boto3.client("ec2", region_name=cfg["aws"]["region"])
+    vpcs = ec2.describe_vpcs(Filters=[{"Name": "isDefault", "Values": ["true"]}])
+    if not vpcs["Vpcs"]:
+        return None
+    vpc_id = vpcs["Vpcs"][0]["VpcId"]
+    subnets = ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])
+    ids = [s["SubnetId"] for s in subnets["Subnets"]]
+    if ids:
+        print(f"Using subnets across {len(ids)} AZs: {', '.join(ids)}")
+    return ",".join(ids) if ids else None
+
+
+def get_fleet_role_arn(cfg: dict) -> str:
+    """Return the IAM role ARN for Spot Fleet.
+
+    Uses the explicit config value if set, otherwise looks for a role named
+    AmazonEC2SpotFleetRole and creates it if it doesn't exist. This is a
+    regular IAM role (not a service-linked role) with a trust policy for
+    spotfleet.amazonaws.com, which is what RequestSpotFleet requires.
+    """
+    fleet_role = cfg["aws"].get("fleet_role_arn", "").strip()
+    if fleet_role:
+        return fleet_role
+
+    iam = boto3.client("iam")
+    role_name = "AmazonEC2SpotFleetRole"
+
+    try:
+        return iam.get_role(RoleName=role_name)["Role"]["Arn"]
+    except iam.exceptions.NoSuchEntityException:
+        pass
+
+    print(f"IAM role '{role_name}' not found — creating it.")
+    trust_policy = json.dumps({
+        "Version": "2012-10-17",
+        "Statement": [{
+            "Effect": "Allow",
+            "Principal": {"Service": "spotfleet.amazonaws.com"},
+            "Action": "sts:AssumeRole",
+        }],
+    })
+    resp = iam.create_role(
+        RoleName=role_name,
+        AssumeRolePolicyDocument=trust_policy,
+        Description="Allows EC2 Spot Fleet to request and manage instances.",
+    )
+    iam.attach_role_policy(
+        RoleName=role_name,
+        PolicyArn="arn:aws:iam::aws:policy/service-role/AmazonEC2SpotFleetTaggingRole",
+    )
+    print(f"Created IAM role: {role_name}")
+    return resp["Role"]["Arn"]
+
+
+def create_spot_fleet(cfg: dict, user_data: str, dry_run: bool) -> str | None:
+    ec2 = boto3.client("ec2", region_name=cfg["aws"]["region"])
     instance_cfg = cfg["instance"]
     aws_cfg = cfg["aws"]
 
-    launch_spec = {
+    launch_spec: dict = {
         "ImageId": instance_cfg["ami_id"],
         "InstanceType": instance_cfg["type"],
         "KeyName": aws_cfg["key_pair"],
         "IamInstanceProfile": {"Name": aws_cfg["iam_instance_profile"]},
         "UserData": base64.b64encode(user_data.encode()).decode(),
-        # Network interface instead of top-level SecurityGroupIds so we can set
-        # AssociatePublicIpAddress=True explicitly (required for SSH access).
-        "NetworkInterfaces": [
-            {
-                "DeviceIndex": 0,
-                "AssociatePublicIpAddress": True,
-                "Groups": [aws_cfg["security_group_id"]],
-                **( {"SubnetId": aws_cfg["subnet_id"].strip()}
-                    if aws_cfg.get("subnet_id", "").strip() else {} ),
-            }
-        ],
+        # Spot Fleet injects its own subnet ID at the instance level when
+        # selecting an AZ, so NetworkInterfaces cannot be used here — use
+        # top-level SecurityGroups and SubnetId instead.
+        "SecurityGroups": [{"GroupId": aws_cfg["security_group_id"]}],
+        **( {"SubnetId": subnet_ids} if (subnet_ids := get_subnet_ids(cfg)) else {} ),
         "BlockDeviceMappings": [
             {
-                "DeviceName": "/dev/sda1",
+                "DeviceName": "/dev/xvda",
                 "Ebs": {
                     "VolumeSize": instance_cfg["volume_size_gb"],
                     "VolumeType": "gp3",
@@ -77,23 +142,6 @@ def request_spot_instance(cfg: dict, user_data: str, dry_run: bool) -> dict | No
                 },
             }
         ],
-    }
-
-    spot_options: dict = {
-        "SpotInstanceType": "one-time",
-        "InstanceInterruptionBehavior": "terminate",
-    }
-    max_price = str(instance_cfg.get("spot_max_price") or "").strip()
-    if max_price:
-        spot_options["MaxPrice"] = max_price
-
-    run_kwargs = {
-        "MinCount": 1,
-        "MaxCount": 1,
-        "InstanceMarketOptions": {
-            "MarketType": "spot",
-            "SpotOptions": spot_options,
-        },
         "TagSpecifications": [
             {
                 "ResourceType": "instance",
@@ -103,31 +151,52 @@ def request_spot_instance(cfg: dict, user_data: str, dry_run: bool) -> dict | No
                 ],
             }
         ],
-        **launch_spec,
     }
 
+    fleet_config: dict = {
+        "AllocationStrategy": "lowestPrice",
+        "TargetCapacity": 1,
+        "Type": "maintain",
+        "InstanceInterruptionBehavior": "terminate",
+        "IamFleetRole": get_fleet_role_arn(cfg),
+        "LaunchSpecifications": [launch_spec],
+    }
+
+    max_price = str(instance_cfg.get("spot_max_price") or "").strip()
+    if max_price:
+        fleet_config["SpotPrice"] = max_price
+
     if dry_run:
-        print("=== DRY RUN — would call ec2.run_instances with: ===")
-        import json
-        printable = {k: v for k, v in run_kwargs.items() if k != "UserData"}
-        printable["UserData"] = "<omitted>"
+        printable = {**fleet_config}
+        printable["LaunchSpecifications"] = [
+            {k: ("<omitted>" if k == "UserData" else v) for k, v in launch_spec.items()}
+        ]
+        print("=== DRY RUN — would call ec2.request_spot_fleet with: ===")
         print(json.dumps(printable, indent=2))
         return None
 
-    response = ec2.run_instances(**run_kwargs)
-    instance = response["Instances"][0]
-    return instance
+    response = ec2.request_spot_fleet(SpotFleetRequestConfig=fleet_config)
+    return response["SpotFleetRequestId"]
 
 
-def wait_for_running(ec2_client, instance_id: str) -> str:
-    print(f"Waiting for {instance_id} to reach running state...", end="", flush=True)
-    waiter = ec2_client.get_waiter("instance_running")
-    waiter.wait(InstanceIds=[instance_id])
-
-    desc = ec2_client.describe_instances(InstanceIds=[instance_id])
-    public_ip = desc["Reservations"][0]["Instances"][0].get("PublicIpAddress", "")
-    print(f" running. Public IP: {public_ip}")
-    return public_ip
+def wait_for_fleet_instance(ec2_client, fleet_id: str) -> tuple[str, str]:
+    """Poll until the fleet has launched an instance; return (instance_id, public_ip)."""
+    print(f"Waiting for fleet {fleet_id} to launch an instance", end="", flush=True)
+    while True:
+        resp = ec2_client.describe_spot_fleet_instances(SpotFleetRequestId=fleet_id)
+        instances = resp.get("ActiveInstances", [])
+        if instances:
+            instance_id = instances[0]["InstanceId"]
+            print(f"\nInstance launched: {instance_id}. Waiting for running state...",
+                  end="", flush=True)
+            waiter = ec2_client.get_waiter("instance_running")
+            waiter.wait(InstanceIds=[instance_id])
+            desc = ec2_client.describe_instances(InstanceIds=[instance_id])
+            public_ip = desc["Reservations"][0]["Instances"][0].get("PublicIpAddress", "")
+            print(f" running. Public IP: {public_ip}")
+            return instance_id, public_ip
+        print(".", end="", flush=True)
+        time.sleep(5)
 
 
 def check_required_fields(cfg: dict) -> list[str]:
@@ -140,7 +209,7 @@ def check_required_fields(cfg: dict) -> list[str]:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Launch MAGELLAN spot instance")
+    parser = argparse.ArgumentParser(description="Launch MAGELLAN spot fleet")
     parser.add_argument("--config", type=Path, default=CONFIG_FILE)
     parser.add_argument("--sampler", help="Override training.sampler from config")
     parser.add_argument("--seed", type=int, help="Override training.seed from config")
@@ -168,16 +237,15 @@ def main() -> None:
     print(f"S3 checkpoints: s3://{cfg['s3']['bucket']}/{cfg['s3']['prefix']}/{run_name}/")
 
     user_data = build_user_data(cfg, sampler, seed, run_name)
-    instance = request_spot_instance(cfg, user_data, args.dry_run)
+    fleet_id = create_spot_fleet(cfg, user_data, args.dry_run)
 
-    if instance is None:
+    if fleet_id is None:
         return  # dry run
 
-    instance_id = instance["InstanceId"]
-    print(f"Instance requested: {instance_id}")
+    print(f"Spot Fleet requested: {fleet_id}")
 
     ec2 = boto3.client("ec2", region_name=cfg["aws"]["region"])
-    public_ip = wait_for_running(ec2, instance_id)
+    instance_id, public_ip = wait_for_fleet_instance(ec2, fleet_id)
 
     key_pair = cfg["aws"]["key_pair"]
     print()
@@ -187,10 +255,10 @@ def main() -> None:
     print("=== Monitor training log ===")
     print(f"  ssh -i ~/.ssh/{key_pair}.pem ec2-user@{public_ip} 'tail -f /var/log/magellan-init.log'")
     print()
-    print("=== Terminate when done ===")
-    print(f"  python aws/terminate_spot.py --instance-id {instance_id}")
+    print("=== Stop training (cancels fleet so it does not relaunch) ===")
+    print(f"  python aws/terminate_spot.py --fleet-id {fleet_id}")
     print()
-    print(f"Instance ID saved for terminate_spot.py: {instance_id}")
+    print(f"Fleet ID: {fleet_id}   Instance ID: {instance_id}")
 
 
 if __name__ == "__main__":

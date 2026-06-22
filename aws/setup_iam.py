@@ -208,6 +208,7 @@ def create_or_update_role(iam, role_name: str, bucket: str, dry_run: bool) -> No
         print(f"  Trust policy: EC2 service")
         print(f"  Inline policy 'S3CheckpointAccess': s3:::{bucket}/*")
         print(f"  Inline policy 'ECRPullAccess': ecr:* (all repos)")
+        print(f"  Managed policy: CloudWatchAgentServerPolicy")
         return
 
     if role_exists(iam, role_name):
@@ -233,6 +234,12 @@ def create_or_update_role(iam, role_name: str, bucket: str, dry_run: bool) -> No
         PolicyDocument=json.dumps(ECR_POLICY),
     )
     print(f"  Attached inline policy: ECRPullAccess")
+
+    iam.attach_role_policy(
+        RoleName=role_name,
+        PolicyArn="arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy",
+    )
+    print(f"  Attached managed policy: CloudWatchAgentServerPolicy")
 
 
 def create_instance_profile(iam, role_name: str, dry_run: bool) -> None:

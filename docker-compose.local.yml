@@ -1,4 +1,16 @@
 services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./outputs:/app/outputs
+    command: >
+      mlflow server --host 0.0.0.0
+      --backend-store-uri sqlite:////app/outputs/mlflow.db
+      --artifacts-destination /app/outputs/mlflow-artifacts
+      --no-serve-artifacts
+
   magellan:
     build:
       context: .
@@ -9,7 +21,7 @@ services:
     environment:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
-      - MLFLOW_TRACKING_URI=sqlite:////app/outputs/mlflow.db
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
       # Set your HuggingFace token if using gated models
       # - HF_TOKEN=...
     volumes:
@@ -17,6 +29,8 @@ services:
       - ./outputs:/app/outputs
       # Cache model weights across runs (avoids re-downloading)
       - hf_cache:/app/.cache/huggingface
+    depends_on:
+      - mlflow
     # Override for MAGELLAN sampler:
     # command: ["python", "-m", "lamorel_launcher.launch",
     #   "--config-path", "/app/configs/little_zoo/",

@@ -1,0 +1,40 @@
+services:
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:latest
+    ports:
+      - "5000:5000"
+    volumes:
+      - ${LOCAL_OUTPUTS}:/app/outputs
+    command: >
+      mlflow server --host 0.0.0.0
+      --backend-store-uri sqlite:////app/outputs/mlflow.db
+      --artifacts-destination s3://${BUCKET}/${S3_PREFIX}/${RUN_NAME}/mlflow-artifacts
+      --no-serve-artifacts
+
+  magellan:
+    image: ${DOCKER_IMAGE}
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - MLFLOW_TRACKING_URI=http://mlflow:5000
+    volumes:
+      - ${LOCAL_OUTPUTS}:/app/outputs
+      - ${LOCAL_HF_CACHE}:/app/.cache/huggingface
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: ${AWS_REGION}
+        awslogs-group: /magellan/training
+        awslogs-stream: ${RUN_NAME}/${INSTANCE_ID}
+        awslogs-create-group: "true"
+    depends_on:
+      - mlflow
+    command: >
+      python -m lamorel_launcher.launch
+      --config-path /app/configs/little_zoo/
+      --config-name ${CONFIG_NAME}
+      rl_script_args.path=/app/magellan/main.py
+      rl_script_args.output_dir=/app/outputs/${RUN_NAME}
+      rl_script_args.seed=${SEED}
+      ${LOADING_PATH_ARG}
