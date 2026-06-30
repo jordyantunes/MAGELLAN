@@ -174,10 +174,10 @@ def main(config_args):
         
     # Load environment
     train_envs = VectorizedEnv(config_args.rl_script_args.number_envs,
-                               not config_args.rl_script_args.adaptation_test, seed)
+                               not config_args.rl_script_args.adaptation_test, seed, config_args.rl_script_args.colors)
     nb_test_envs = 256
-    test_envs = VectorizedEnv(nb_test_envs, False, seed)
-    eval_envs = VectorizedEnv(nb_test_envs, not config_args.rl_script_args.adaptation_test, seed)
+    test_envs = VectorizedEnv(nb_test_envs, False, seed, config_args.rl_script_args.colors)
+    eval_envs = VectorizedEnv(nb_test_envs, not config_args.rl_script_args.adaptation_test, seed, config_args.rl_script_args.colors)
     
     train_goals = generate_goals(train_envs.envs[0], seed, config_args.rl_script_args.goals_distribution,
                                  config_args.rl_script_args.adaptation_test)

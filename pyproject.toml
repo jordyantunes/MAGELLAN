@@ -24,4 +24,4 @@ aws = [
 
 [tool.uv.sources]
 lamorel = { git = "https://github.com/jordyantunes/lamorel", subdirectory = "lamorel" }
-LittleZoo = { git = "https://github.com/jordyantunes/littlezoo" }
+LittleZoo = { git = "https://github.com/jordyantunes/littlezoo", branch = "colors" }

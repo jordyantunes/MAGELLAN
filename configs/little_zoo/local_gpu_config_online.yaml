@@ -65,6 +65,7 @@ rl_script_args:
   goals_distribution: [20000, 4000, 800, 160, 32] #25k
   #goals_distribution: [40000, 8000, 1600, 320, 64] #50k
   #goals_distribution: [80000, 16000, 3200, 640, 128] #100k
+  colors: True
 
 # MALP Params
 srdiff_args:

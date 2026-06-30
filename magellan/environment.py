@@ -8,8 +8,8 @@ from little_zoo import LittleZoo
 
 class VectorizedEnv():
     
-    def __init__(self, num_envs, train, seed=None):
-        self.envs = [LittleZoo(train = train, seed = seed + i * 100) for i in range(num_envs)]
+    def __init__(self, num_envs, train, seed=None, colors=False):
+        self.envs = [LittleZoo(colors = colors, train = train, seed = seed + i * 100) for i in range(num_envs)]
     
     def reset(self, goals=None):
         if goals is not None:
@@ -57,13 +57,25 @@ def generate_goals(env, seed, distribution, filter_test):
     carnivores_test_set = set(carnivores_test)
     furnitures_test_set = set(furnitures_test)
 
+    colors = env.env_params['attributes']['colors'] if 'colors' in env.env_params['admissible_attributes'] else None
+        
     def get_name(obj):
-        if obj in plants_set | plants_test_set:
-            return obj + ' seed'
-        elif obj in herbivores_set | carnivores_set | herbivores_test_set | carnivores_test_set:
-            return 'baby ' + obj
+        if colors:
+            color = rng.choice(colors)
+
+            if obj in plants_set | plants_test_set:
+                return f'{color} {obj} seed'
+            elif obj in herbivores_set | carnivores_set | herbivores_test_set | carnivores_test_set:
+                return f'{color} baby {obj}'
+            else:
+                return f'{color} {obj}'
         else:
-            return obj
+            if obj in plants_set | plants_test_set:
+                return obj + ' seed'
+            elif obj in herbivores_set | carnivores_set | herbivores_test_set | carnivores_test_set:
+                return 'baby ' + obj
+            else:
+                return obj
 
     def _reservoir_add(reservoir, item, count, k):
         if count < k:
@@ -90,22 +102,49 @@ def generate_goals(env, seed, distribution, filter_test):
                     e3_name = get_name(e3)
                     for e4 in objects:
                         e4_name = get_name(e4)
-                        seen = {e1, e2, e3, e4}
-                        has_water = 'water' in seen
-                        has_plant = bool(seen & plants_set)
-                        has_herbivore = bool(seen & herbivores_set)
+                        if colors:
+                            seen = {
+                                (e1, e1_name),
+                                (e2, e2_name),
+                                (e3, e3_name),
+                                (e4, e4_name),
+                            }
+                            seen_types = {x[0] for x in seen}
+                        else:
+                            seen = {e1, e2, e3, e4}
+                            seen_types = seen
+
+                        has_water = 'water' in seen_types
+                        has_plant = bool(seen_types & plants_set)
+                        has_herbivore = bool(seen_types & herbivores_set)
                         for o in objects:
-                            g = (f'Goal: {{t}} {o}\n'
-                                 f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
-                                 'You are standing on: nothing\n'
-                                 'Inventory (0/2): empty\n'
-                                 'Action: ')
-                            meta = (o, e1, e2, e3, e4)
-                            o_in_scene = o in seen
+                            if colors:
+                                for color in colors:
+                                    g = (f'Goal: {{t}} {color} {o}\n'
+                                        f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
+                                        'You are standing on: nothing\n'
+                                        'Inventory (0/2): empty\n'
+                                        'Action: ')
+                                    meta = (o, e1, e2, e3, e4, color)
+                                    o_in_scene = any(
+                                        obj == o and color in name
+                                        for obj, name in seen
+                                    )
+                            else:
+                                g = (f'Goal: {{t}} {o}\n'
+                                    f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
+                                    'You are standing on: nothing\n'
+                                    'Inventory (0/2): empty\n'
+                                    'Action: ')
+                                meta = (o, e1, e2, e3, e4)
+                                o_in_scene = o in seen
 
                             for t in ('Grasp', 'Grow'):
                                 goal = g.replace('{t}', t)
-                                full_meta = (t + ' ' + o,) + meta[1:]
+                                if colors:
+                                    full_meta = (t + ' ' + color + ' ' + o,) + meta[1:]
+                                else:
+                                    full_meta = (t + ' ' + o,) + meta[1:]
 
                                 if (not o_in_scene
                                         or t == 'Grow' and (
@@ -152,11 +191,19 @@ def generate_goals(env, seed, distribution, filter_test):
                         has_plant = bool(seen & plants_set)
                         has_herbivore = bool(seen & herbivores_set)
                         for t in ('Grasp', 'Grow'):
-                            g = (f'Goal: {t} {o}\n'
-                                 f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
-                                 'You are standing on: nothing\n'
-                                 'Inventory (0/2): empty\n'
-                                 'Action: ')
+                            if colors:
+                                for color in colors:
+                                    g = (f'Goal: {t} {color} {o}\n'
+                                        f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
+                                        'You are standing on: nothing\n'
+                                        'Inventory (0/2): empty\n'
+                                        'Action: ')
+                            else:
+                                g = (f'Goal: {t} {o}\n'
+                                    f'You see: {e1_name}, {e2_name}, {e3_name}, {e4_name}\n'
+                                    'You are standing on: nothing\n'
+                                    'Inventory (0/2): empty\n'
+                                    'Action: ')
 
                             if (o not in seen
                                     or t == 'Grow' and (
@@ -176,7 +223,10 @@ def generate_goals(env, seed, distribution, filter_test):
                             else:
                                 raise ValueError('Invalid object')
 
-                            all_goals[g] = (t + ' ' + o, e1, e2, e3, e4)
+                            if colors:
+                                all_goals[g] = (t + ' ' + color + ' ' + o, e1, e2, e3, e4)
+                            else:
+                                all_goals[g] = (t + ' ' + o, e1, e2, e3, e4)
 
         if filter_test:
             def _sample(lst, k):

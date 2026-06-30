@@ -64,6 +64,7 @@ rl_script_args:
   # Environment
   env_name: LittleZoo
   goals_distribution: [20000, 4000, 800, 160, 32] #25k
+  colors: True
 
 # Goal sampler params
 magellan_args:
