@@ -10,6 +10,7 @@ import pickle
 import random
 import subprocess
 import torch
+from datetime import datetime
 
 from collections import deque
 from lamorel import Caller, lamorel_init
@@ -23,6 +24,7 @@ from models import LogScoringModuleFn, ValueHeadModuleFn, SRHeadModuleFn
 from updater import SACUpdater
 from utils.generate_prompt import generate_prompt
 from utils.logs_utils import save_logs, save_goal_sampler
+from utils.perf_utils import PerfTimer
 from utils.replay_buffer import NStepReplayBuffer
 from utils.scoring_utils import scores_stacking
 from utils.tests import test_policy, test_lp
@@ -30,7 +32,7 @@ from utils.tests import test_policy, test_lp
 # Initialize Lamorel
 lamorel_init()
 
-def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_envs, state=None):
+def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_envs, perf, state=None):
     
     data = {
         "ep_len": [],
@@ -61,12 +63,13 @@ def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_e
             
         possible_actions = infos["possible_actions"]
         prompts = [generate_prompt(_o, _g) for _o, _g in zip(observations, infos['goal'])]
-        output = agent.custom_module_fns(['score'],
-                                          contexts=prompts,
-                                          candidates=possible_actions,
-                                          require_grad=False,
-                                          peft_adapter='default')
-        scores = scores_stacking([_o['score'] for _o in output])
+        with perf.time("collect/llm_call"):
+            output = agent.custom_module_fns(['score'],
+                                              contexts=prompts,
+                                              candidates=possible_actions,
+                                              require_grad=False,
+                                              peft_adapter='default')
+            scores = scores_stacking([_o['score'] for _o in output])
         proba_dist = torch.distributions.Categorical(logits=scores)
         sampled_actions = proba_dist.sample()
         actions_id = sampled_actions.cpu().numpy()
@@ -80,7 +83,8 @@ def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_e
         data["actions"].append(actions_command)
         data["prompts"].append(prompts)
             
-        observations, rewards, dones, _, infos = train_envs.step(actions_command)
+        with perf.time("collect/env_step"):
+            observations, rewards, dones, _, infos = train_envs.step(actions_command)
 
         for i in range(nb_envs):
             buffer.add(prompts[i], actions_command[i], rewards[i], generate_prompt(observations[i], infos['goal'][i]), dones[i], possible_actions[i])
@@ -110,6 +114,19 @@ def collect_trajectories(train_envs, agent, goal_sampler, buffer, nb_steps, nb_e
     }
         
     return data, state
+
+def _flatten_worker_perf_metrics(results, timer_prefix, gpu_prefix):
+    """Averages per-worker perf/GPU dicts (returned alongside losses from agent.update)
+    into flat MLflow metric names: perf/<timer_prefix>_<name>_seconds, <gpu_prefix>/<name>."""
+    metrics = {}
+    if not results:
+        return metrics
+    for k in results[0].keys():
+        if k.startswith(f"{timer_prefix}/"):
+            metrics[f"perf/{k.replace('/', '_')}"] = np.mean([_r[k] for _r in results])
+        elif k.startswith(f"{gpu_prefix}/"):
+            metrics[k] = np.mean([_r[k] for _r in results])
+    return metrics
 
 def reset_history():
     return {
@@ -148,6 +165,9 @@ def main(config_args):
     
     is_rl_process = int(os.environ.get("RANK", "0")) == 0
 
+    run_timestamp = datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    output_dir = os.path.join(config_args.rl_script_args.output_dir, run_timestamp)
+
     if is_rl_process:
         mlflow.set_experiment(config_args.rl_script_args.goal_sampler)
         mlflow.start_run(run_name=f"seed{seed}")
@@ -171,6 +191,7 @@ def main(config_args):
             "number_envs": config_args.rl_script_args.number_envs,
             "num_episodes": config_args.rl_script_args.num_episodes,
             "goals_distribution": str(config_args.rl_script_args.goals_distribution),
+            "output_dir": output_dir,
         })
 
     loading_path = config_args.rl_script_args.loading_path
@@ -305,17 +326,19 @@ def main(config_args):
     
     state = None
     nb_updates = 0
+    perf = PerfTimer()
     while ep < config_args.rl_script_args.num_episodes:
-        
+
         # Test the agent
         if ep >= config_args.rl_script_args.test_freq * nb_test:
-            result = test_policy(test_envs, test_goals, agent)
-            if not config_args.rl_script_args.adaptation_test:
-                eval_result = test_policy(eval_envs, eval_goals, agent)
-            if config_args.rl_script_args.goal_sampler == "magellan":
-                result.update(test_lp(test_goals, goal_sampler))
+            with perf.time("test"):
+                result = test_policy(test_envs, test_goals, agent)
                 if not config_args.rl_script_args.adaptation_test:
-                    eval_result.update(test_lp(eval_goals, goal_sampler))
+                    eval_result = test_policy(eval_envs, eval_goals, agent)
+                if config_args.rl_script_args.goal_sampler == "magellan":
+                    result.update(test_lp(test_goals, goal_sampler))
+                    if not config_args.rl_script_args.adaptation_test:
+                        eval_result.update(test_lp(eval_goals, goal_sampler))
             nb_test += 1
             test_results.append((ep, result))
             if is_rl_process:
@@ -343,10 +366,12 @@ def main(config_args):
                 mlflow.log_metrics(diag, step=ep)
 
         # Collect trajectories
-        data, state = collect_trajectories(train_envs, agent, goal_sampler, rb, 
-                                    config_args.rl_script_args.update_freq,
-                                    config_args.rl_script_args.number_envs, 
-                                    state)
+        with perf.time("collect_trajectories"):
+            data, state = collect_trajectories(train_envs, agent, goal_sampler, rb,
+                                        config_args.rl_script_args.update_freq,
+                                        config_args.rl_script_args.number_envs,
+                                        perf,
+                                        state)
         ep += data['ep_done']
         
         # Update history
@@ -362,7 +387,7 @@ def main(config_args):
             success_buffer.extend(data['ep_ret'])
         
         save_model_and_history = (nb_updates % config_args.rl_script_args.save_freq == 1 or ep >= config_args.rl_script_args.num_episodes)
-        saving_path = config_args.rl_script_args.output_dir + f"/{ep}"
+        saving_path = output_dir + f"/{ep}"
         
         
         if len(rb) >= config_args.rl_script_args.minibatch_size:
@@ -373,23 +398,24 @@ def main(config_args):
                     
                 # Update the agent
                 update_policy = config_args.rl_script_args.warmup_updates < nb_updates or loading_path is not None
-                policy_update_results = agent.update(collected_trajectories['states'],
-                                            collected_trajectories['possible_actions'],
-                                            actions=collected_trajectories['actions'],
-                                            rewards=collected_trajectories['rewards'],
-                                            dones=collected_trajectories['dones'],
-                                            next_states=collected_trajectories['next_states'],
-                                            update_policy=update_policy,
-                                            lr=config_args.rl_script_args.lr,
-                                            a_lr=config_args.rl_script_args.a_lr,
-                                            alpha=config_args.rl_script_args.alpha,
-                                            gammas=collected_trajectories['gammas'],
-                                            save_after_update=save_model_and_history,
-                                            saving_path=saving_path,
-                                            loading_path=loading_path,
-                                            func='sac_update'
-                                            )
-                
+                with perf.time("sac_update"):
+                    policy_update_results = agent.update(collected_trajectories['states'],
+                                                collected_trajectories['possible_actions'],
+                                                actions=collected_trajectories['actions'],
+                                                rewards=collected_trajectories['rewards'],
+                                                dones=collected_trajectories['dones'],
+                                                next_states=collected_trajectories['next_states'],
+                                                update_policy=update_policy,
+                                                lr=config_args.rl_script_args.lr,
+                                                a_lr=config_args.rl_script_args.a_lr,
+                                                alpha=config_args.rl_script_args.alpha,
+                                                gammas=collected_trajectories['gammas'],
+                                                save_after_update=save_model_and_history,
+                                                saving_path=saving_path,
+                                                loading_path=loading_path,
+                                                func='sac_update'
+                                                )
+
                 _policy_loss = np.mean([_r['policy_loss'] for _r in policy_update_results])
                 _value_loss = np.mean([_r['value_loss'] for _r in policy_update_results])
                 _alpha_loss = np.mean([_r['alpha_loss'] for _r in policy_update_results])
@@ -407,8 +433,9 @@ def main(config_args):
                         "train/alpha_loss": _alpha_loss,
                         "train/entropy": _entropy,
                         "train/alpha": _alpha,
+                        **_flatten_worker_perf_metrics(policy_update_results, "sac_update", "sac_update_gpu"),
                     }, step=ep)
-                                                
+
                 if use_magellan and len(goal_buffer) > 0:
                     # Update the SR estimator
                     p = np.arange(1, len(goal_buffer) + 1)
@@ -416,20 +443,27 @@ def main(config_args):
                     idx = np.random.choice(len(goal_buffer), size=config_args.magellan_args.batch_size, p=p)
                     goals = [goal_buffer[i] for i in idx]
                     success = [success_buffer[i] for i in idx]
-                    agent.update([""] * len(goals),
-                                [[""]] * len(success),
-                                goals=goals,
-                                success=success,
-                                lr=config_args.rl_script_args.lr,
-                                save_after_update=save_model_and_history,
-                                saving_path=saving_path,
-                                loading_path=loading_path,
-                                func='sr_update',
-                                adapters=config_args.magellan_args.sr_adapters
-                            )
-                
+                    with perf.time("sr_update"):
+                        sr_update_results = agent.update([""] * len(goals),
+                                    [[""]] * len(success),
+                                    goals=goals,
+                                    success=success,
+                                    lr=config_args.rl_script_args.lr,
+                                    save_after_update=save_model_and_history,
+                                    saving_path=saving_path,
+                                    loading_path=loading_path,
+                                    func='sr_update',
+                                    adapters=config_args.magellan_args.sr_adapters
+                                )
+                    if is_rl_process and sr_update_results is not None:
+                        mlflow.log_metrics(
+                            _flatten_worker_perf_metrics(sr_update_results, "sr_update", "sr_update_gpu"),
+                            step=ep
+                        )
+
             # Update goal sampler state
-            goal_sampler_update_results = goal_sampler.update(goals=data['goals'], returns=data['ep_ret'])
+            with perf.time("goal_sampler_update"):
+                goal_sampler_update_results = goal_sampler.update(goals=data['goals'], returns=data['ep_ret'])
             nb_updates += 1
                 
         print(f"{ep}/{config_args.rl_script_args.num_episodes} episodes done.")
@@ -441,29 +475,37 @@ def main(config_args):
             history['lp'].append(goal_sampler_update_results['lp'])
             history['keys'] = goal_sampler.keys
         
-        # Save the logs  
+        # Save the logs
         if save_model_and_history:
-            if not os.path.exists(saving_path):
-                os.makedirs(saving_path)
-                
-            save_goal_sampler(saving_path, goal_sampler, 
-                              config_args.rl_script_args.goal_sampler)
-                
-            save_logs(saving_path, {
-                "/history.pkl": history,
-                "/test_results.pkl": test_results,
-                "/eval_results.pkl": eval_results,
-                "/replay_buffer.pkl": rb
-            })
-            
-            if use_magellan:
+            with perf.time("checkpoint_save"):
+                if not os.path.exists(saving_path):
+                    os.makedirs(saving_path)
+
+                save_goal_sampler(saving_path, goal_sampler,
+                                  config_args.rl_script_args.goal_sampler)
+
                 save_logs(saving_path, {
-                    "/goal_buffer.pkl": goal_buffer,
-                    "/success_buffer.pkl": success_buffer
+                    "/history.pkl": history,
+                    "/test_results.pkl": test_results,
+                    "/eval_results.pkl": eval_results,
+                    "/replay_buffer.pkl": rb
                 })
-            
+
+                if use_magellan:
+                    save_logs(saving_path, {
+                        "/goal_buffer.pkl": goal_buffer,
+                        "/success_buffer.pkl": success_buffer
+                    })
+
+                if is_rl_process:
+                    mlflow.log_artifacts(saving_path, artifact_path=f"checkpoints/{ep}")
+
             history = reset_history()
-    
+
+        if is_rl_process:
+            mlflow.log_metrics(perf.as_metrics(prefix="perf"), step=ep)
+        perf.reset()
+
     print("Training done.")
     if is_rl_process:
         mlflow.end_run()

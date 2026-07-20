@@ -12,6 +12,7 @@ from collections import OrderedDict, deque
 from lamorel import BaseUpdater
 from tqdm import tqdm
 from utils.scoring_utils import scores_stacking
+from utils.perf_utils import PerfTimer, gpu_mem_snapshot
 
 class SACUpdater(BaseUpdater):
     
@@ -86,7 +87,11 @@ class SACUpdater(BaseUpdater):
             return
         
         elif kwargs['func'] == 'sr_update':
-            
+
+            perf = PerfTimer()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+
             self._llm_module.module._modules['_LLM_model'].set_adapter(kwargs['adapters'])
             
             if not hasattr(self, 'optimizer_sr'):
@@ -119,27 +124,35 @@ class SACUpdater(BaseUpdater):
                     continue
                 
                 # Use LLM to compute again action probabilities and value
-                output = self._llm_module(['sr'], contexts=_goals,
-                                        require_grad=True, minibatch_size=_batch_size,
-                                        peft_adapter=kwargs['adapters'])
-                sr = scores_stacking([_o['sr'] for _o in output]).squeeze()
-                                        
-                # Compute sr loss
-                sr_loss = F.binary_cross_entropy_with_logits(sr, _success)
-                
-                # Compute final loss
-                loss = sr_loss / gradient_accumulation_steps
-                
+                with perf.time("fwd"):
+                    output = self._llm_module(['sr'], contexts=_goals,
+                                            require_grad=True, minibatch_size=_batch_size,
+                                            peft_adapter=kwargs['adapters'])
+                    sr = scores_stacking([_o['sr'] for _o in output]).squeeze()
+
+                    # Compute sr loss
+                    sr_loss = F.binary_cross_entropy_with_logits(sr, _success)
+
+                    # Compute final loss
+                    loss = sr_loss / gradient_accumulation_steps
+
                 # Backward
-                loss.backward()
-    
+                with perf.time("backward"):
+                    loss.backward()
+
             self.optimizer_sr.step()
-                    
+
             if kwargs["save_after_update"] and self._accelerator.process_index == 1:
                 torch.save(self.optimizer_sr.state_dict(), kwargs["saving_path"] + "/optimizer_sr.checkpoint")
-            
+
+            return {**perf.as_metrics(prefix="sr_update"), **gpu_mem_snapshot(prefix="sr_update_gpu")}
+
         else: # sac_update
-                        
+
+            perf = PerfTimer()
+            if torch.cuda.is_available():
+                torch.cuda.reset_peak_memory_stats()
+
             # Set default LoRA adapters
             self._llm_module.module._modules['_LLM_model'].set_adapter('default')
                         
@@ -207,11 +220,12 @@ class SACUpdater(BaseUpdater):
                     
                 # Compute current Q values
                 prompts = [s + a for s, a in zip(_states, _actions)]
-                output = self._llm_module(['critic'], contexts=prompts, require_grad=True, 
-                                          minibatch_size=_batch_size, peft_adapter='default')
-                q_values = scores_stacking([_o['critic'] for _o in output]).squeeze()
-                
-                with torch.no_grad():
+                with perf.time("critic_fwd"):
+                    output = self._llm_module(['critic'], contexts=prompts, require_grad=True,
+                                              minibatch_size=_batch_size, peft_adapter='default')
+                    q_values = scores_stacking([_o['critic'] for _o in output]).squeeze()
+
+                with torch.no_grad(), perf.time("target_fwd"):
                     # Compute actions probabilities and log probabilities for the next states
                     output = self._llm_module(['score'], contexts=_next_states, candidates=_possibles_actions,
                                               require_grad=False, minibatch_size=_batch_size, peft_adapter='default')
@@ -219,7 +233,7 @@ class SACUpdater(BaseUpdater):
                     action_log_probs = F.log_softmax(scores, dim=-1)
                     action_probs = F.softmax(scores, dim=-1)
                     mask = ~torch.isinf(scores)
-                    
+
                     # Compute target Q values
                     max_len = max([len(pa) for pa in _possibles_actions])
                     possible_actions_padding = [pa if len(pa) == max_len else pa + [""] * (max_len - len(pa)) for pa in _possibles_actions]
@@ -229,24 +243,27 @@ class SACUpdater(BaseUpdater):
                     q_target_values = action_probs * (q_target_values - self.alpha * action_log_probs.masked_fill(~mask, 0.0))
                     q_target_values = q_target_values.sum(-1)
                     next_q_values = _rewards + (1 - _dones) * _gammas * q_target_values
-                                    
+
                 value_loss = F.mse_loss(q_values, next_q_values)
                 value_loss = value_loss / gradient_accumulation_steps
-                
+
                 value_loss_log += value_loss.item()
                 entropy_log.append(torch.mean(-torch.sum(action_probs * action_log_probs.masked_fill(~mask, 0.0), dim=-1)))
-                
+
                 # Backward
-                value_loss.backward()
-                
+                with perf.time("backward"):
+                    value_loss.backward()
+
                 # Free unused memory
                 del value_loss, q_values, scores, action_log_probs, action_probs, next_q_values
-                torch.cuda.empty_cache()
-            
-            self.critic_optimizer.step()            
-                       
+                with perf.time("cuda_empty_cache"):
+                    torch.cuda.empty_cache()
+
+            with perf.time("optimizer_step"):
+                self.critic_optimizer.step()
+
             # Update target networks with polyak averaging
-            with (torch.no_grad()):
+            with perf.time("polyak_update"), (torch.no_grad()):
                 for (n, p), (_, p_targ) in zip(
                         ((n, p) for n, p in self._iterator_named_filtered_params(self._critic_parameters_filter)),
                         ((n, p) for n, p in self._iterator_named_filtered_params(self._critic_target_parameters_filter))):
@@ -283,7 +300,7 @@ class SACUpdater(BaseUpdater):
                     _batch_size = sum([len(pa) for pa in _possibles_actions])
                     
                     # Compute current Q values
-                    with torch.no_grad():
+                    with perf.time("policy_current_q_fwd"), torch.no_grad():
                         max_len = max([len(pa) for pa in _possibles_actions])
                         possible_actions_padding = [pa if len(pa) == max_len else pa + [""] * (max_len - len(pa)) for pa in _possibles_actions]
                         prompts = [obs + possible_action for obs, possible_actions in zip(_states, possible_actions_padding) for possible_action in possible_actions]
@@ -291,43 +308,48 @@ class SACUpdater(BaseUpdater):
                         q_values = torch.stack([_o['critic'].squeeze() for _o in output]).view(-1, max_len)
 
                     # Compute probs and log probs for the current states
-                    output = self._llm_module(['score'], contexts=_states, candidates=_possibles_actions,
-                                            require_grad=True, minibatch_size=_batch_size, peft_adapter='default')
-                    scores = scores_stacking([_o['score'] for _o in output]).squeeze()
-                    mask = ~torch.isinf(scores)
-                    action_log_probs = F.log_softmax(scores, dim=-1)
-                    action_probs = F.softmax(scores, dim=-1)
-                    
+                    with perf.time("policy_fwd"):
+                        output = self._llm_module(['score'], contexts=_states, candidates=_possibles_actions,
+                                                require_grad=True, minibatch_size=_batch_size, peft_adapter='default')
+                        scores = scores_stacking([_o['score'] for _o in output]).squeeze()
+                        mask = ~torch.isinf(scores)
+                        action_log_probs = F.log_softmax(scores, dim=-1)
+                        action_probs = F.softmax(scores, dim=-1)
+
                     valid_count = torch.sum(mask, dim=-1)
-                    
+
                     policy_loss = torch.sum(action_probs * (self.alpha * action_log_probs.masked_fill(~mask, 0.0) - q_values), dim=-1)
                     policy_loss = torch.mean(policy_loss)
                     policy_loss = policy_loss / gradient_accumulation_steps
-                    
-                    if kwargs['alpha'] == 'auto':           
+
+                    if kwargs['alpha'] == 'auto':
                         alpha_loss = torch.sum(action_probs.detach() * (-self.log_alpha.exp() * (action_log_probs.masked_fill(~mask, 0.0) + self.target_entropy(valid_count)).detach()), dim=-1)
                         alpha_loss = torch.mean(alpha_loss)
                         alpha_loss = alpha_loss / gradient_accumulation_steps
                     else:
                         alpha_loss = torch.tensor(0.0)
-                    
+
                     policy_loss_log += policy_loss.item()
                     alpha_loss_log += alpha_loss.item()
-                        
+
                     # Backward and cleanup
-                    policy_loss.backward()
+                    with perf.time("backward"):
+                        policy_loss.backward()
+                        if kwargs['alpha'] == 'auto':
+                            alpha_loss.backward()
                     del policy_loss, action_log_probs, action_probs, mask
 
-                    if kwargs['alpha'] == 'auto': 
-                        alpha_loss.backward()
+                    if kwargs['alpha'] == 'auto':
                         del alpha_loss
 
                     del scores, q_values, possible_actions_padding, prompts
-                    torch.cuda.empty_cache()
-        
-                self.policy_optimizer.step()
-                if kwargs['alpha'] == 'auto':
-                    self.a_optimizer.step()
+                    with perf.time("cuda_empty_cache"):
+                        torch.cuda.empty_cache()
+
+                with perf.time("optimizer_step"):
+                    self.policy_optimizer.step()
+                    if kwargs['alpha'] == 'auto':
+                        self.a_optimizer.step()
                 
                     
             if kwargs["save_after_update"] and self._accelerator.process_index == 1:
@@ -353,7 +375,8 @@ class SACUpdater(BaseUpdater):
                 print("Model saved")
             
             return {'value_loss': value_loss_log, 'policy_loss': policy_loss_log, 'alpha_loss': alpha_loss_log,
-                    'alpha': self.alpha.item(), 'entropy': torch.mean(torch.stack(entropy_log)).item()}
+                    'alpha': self.alpha.item(), 'entropy': torch.mean(torch.stack(entropy_log)).item(),
+                    **perf.as_metrics(prefix="sac_update"), **gpu_mem_snapshot(prefix="sac_update_gpu")}
         
         self._llm_module.module._modules['_LLM_model'].set_adapter('default')
 
