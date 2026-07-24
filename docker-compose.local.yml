@@ -10,6 +10,7 @@ services:
       --backend-store-uri sqlite:////app/outputs/mlflow.db
       --artifacts-destination /app/outputs/mlflow-artifacts
       --no-serve-artifacts
+      --allowed-hosts "mlflow,mlflow:*,localhost,localhost:*"
 
   magellan:
     build:
@@ -22,6 +23,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - MLFLOW_TRACKING_URI=http://mlflow:5000
+      - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
       # Set your HuggingFace token if using gated models
       # - HF_TOKEN=...
     volumes:
@@ -31,13 +33,13 @@ services:
       - hf_cache:/app/.cache/huggingface
     depends_on:
       - mlflow
-    # Override for MAGELLAN sampler:
-    # command: ["python", "-m", "lamorel_launcher.launch",
-    #   "--config-path", "/app/configs/little_zoo/",
-    #   "--config-name", "local_gpu_config_magellan",
-    #   "rl_script_args.path=/app/magellan/main.py",
-    #   "rl_script_args.output_dir=/app/outputs/magellan",
-    #   "rl_script_args.seed=0"]
+    command: >
+      python -m lamorel_launcher.launch
+      --config-path /app/configs/little_zoo/
+      --config-name ${CONFIG_NAME:-local_gpu_config_magellan_dev}
+      rl_script_args.path=/app/magellan/main.py
+      rl_script_args.output_dir=/app/outputs/${OUTPUT_DIR:-magellan}
+      rl_script_args.seed=${SEED:-0}
 
 volumes:
   hf_cache:
