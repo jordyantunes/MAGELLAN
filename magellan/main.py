@@ -29,6 +29,11 @@ from utils.replay_buffer import NStepReplayBuffer
 from utils.scoring_utils import scores_stacking
 from utils.tests import test_policy, test_lp
 
+# TF32 on Ampere+ tensor cores; must run in every process (RL + LLM server)
+# before any model is loaded. See FP32_BOTTLENECK.md for the measurements.
+torch.backends.cuda.matmul.allow_tf32 = True
+torch.backends.cudnn.allow_tf32 = True
+
 # Initialize Lamorel
 lamorel_init()
 
@@ -250,7 +255,9 @@ def main(config_args):
                                              config_args.rl_script_args.gradient_batch_size,
                                              config_args.rl_script_args.goal_sampler,
                                              use_magellan,
-                                             loading_path),
+                                             loading_path,
+                                             empty_cache_between_chunks=config_args.rl_script_args.get(
+                                                 "empty_cache_between_chunks", False)),
                    custom_model_initializer=SequentialInitializer([
                         PeftInitializer(config_args.lamorel_args.llm_args.model_type,
                                         config_args.lamorel_args.llm_args.model_path,

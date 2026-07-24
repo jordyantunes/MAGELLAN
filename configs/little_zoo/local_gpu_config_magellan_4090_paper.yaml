@@ -1,0 +1,84 @@
+lamorel_args:
+  log_level: info
+  allow_subgraph_use_whith_gradient: true
+  distributed_setup_args:
+    n_rl_processes: 1
+    n_llm_processes: 1          # paper uses 2 LLM instances, but lamorel/server/server.py:88-90 splits torch.cuda.device_count() GPUs across LLM processes with np.array_split and no overlap — on a 1-GPU box the 2nd LLM process gets devices=[] and crashes with IndexError. n_llm_processes must be <= number of visible GPUs; not fixable via config on a single 4090.
+  accelerate_args:
+    config_file: ./default_config.yaml
+    machine_rank: 0
+    main_process_ip: 127.0.0.1
+    num_machines: 1
+    main_process_port: 29501
+  llm_args:
+    seed:                        # must be present (even if null) or lamorel raises ConfigAttributeError
+    model_type: seq2seq
+    model_path: google/flan-t5-base   # HF Hub id — works without a local /LLMs mount
+    pretrained: true
+    minibatch_size: 256          # VRAM_TUNING.md: 256/64 is the tuned setting for 24GB (matched vs. 5080); kept for VRAM safety, not a paper hyperparameter
+    pre_encode_inputs: true
+    load_in_4bit: false          # paper uses 4-bit (Table row C.4), but 4-bit + explicit device_map crashes with transformers==4.44.2 on this stack
+    parallelism:
+      use_gpu: true
+      model_parallelism_size: 1
+      synchronize_gpus_after_scoring: false
+      empty_cuda_cache_after_scoring: false
+
+rl_script_args:
+  path: ???
+  seed: ???
+
+  # llm
+  gradient_batch_size: 64       # THROUGHPUT_SCALING.md tuned setting; not a paper table value (paper doesn't separately specify this lamorel batching knob)
+  gradient_minibatch_size:
+
+  # LoRA
+  use_lora: true
+  lora_r: 16
+  lora_alpha: 32
+
+  # SAC (Table 5)
+  gamma: 0.99
+  lr: 1e-4                      # Table 5: critic lr 1e-4, actor lr 1e-4 (both share this key)
+  a_lr: 1e-3                    # Table 5: "Entropy coefficient learning rate" 1e-3 (misleadingly named a_lr = alpha lr, not actor lr)
+  minibatch_size: 256           # Table 5: Batch size 256
+  update_freq: 64                # Table 5: Update frequency 64
+  nb_updates: 1                  # Table 5: Number of updates 1
+  empty_cache_between_chunks: false  # ~42 ms/call sync overhead; enable when stepping delay_depth toward 99 if VRAM gets tight — see FP32_BOTTLENECK.md
+  warmup_updates: 10             # paper: "warm-up phase of 10 updates" (Q-function only)
+  buffer_size: 500000            # Table 5: Replay buffer capacity 500000
+  n_steps: 3                     # Table 5: n-step 3
+  alpha: auto                    # Table 5: Entropy coefficient auto (init 0.05 is hardcoded in updater.py log_alpha=-3.0)
+
+  # rl training
+  number_envs: 32               # paper: 32 vectorized Little-Zoo instances (Appendix C.4)
+  num_episodes: 500000
+  goal_sampler: magellan
+  loading_path:
+  adaptation_test: false
+
+  # logs
+  save_freq: 200
+  test_freq: 1000
+  output_dir: ???
+
+  # Environment
+  env_name: LittleZoo
+  goals_distribution: [20000, 4000, 800, 160, 32] #25k
+
+# Goal sampler params (Table 6)
+magellan_args:
+  N: 100                        # unused by code (dead field, see goal_sampler.py:241) — kept only for config-shape parity
+  epsilon_start: 1.0
+  epsilon_end: 0.2
+  epsilon_decay: 320
+  use_value: false
+  buffer_size: 5000              # Table 6: D size 5000
+  batch_size: 256                # Table 6: Batch size 256
+  recompute_freq: 32              # Table 6: Update frequency 32
+  sr_adapters: sr_adapters
+  train_llm: true
+  delay_depth: 24                 # controls the ACTUAL weights buffer size (= delay_depth+1) that Table 6 calls "B size: 100".
+                                   # Paper value would be 99, but each entry clones live LoRA+MLP weights on GPU every recompute_freq
+                                   # updates, so we start at 24 (buffer=25) and step up (49, 99) while watching VRAM before going
+                                   # all the way to the paper's value. See VRAM_TUNING.md.

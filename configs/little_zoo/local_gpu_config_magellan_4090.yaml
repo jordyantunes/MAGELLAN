@@ -1,0 +1,81 @@
+lamorel_args:
+  log_level: info
+  allow_subgraph_use_whith_gradient: true
+  distributed_setup_args:
+    n_rl_processes: 1
+    n_llm_processes: 1          # single GPU — no benefit splitting LLM across two procs
+  accelerate_args:
+    config_file: ./default_config.yaml
+    machine_rank: 0
+    main_process_ip: 127.0.0.1
+    num_machines: 1
+    main_process_port: 29501
+  llm_args:
+    seed:                        # must be present (even if null) or lamorel raises ConfigAttributeError
+    model_type: seq2seq
+    model_path: google/flan-t5-base   # HF Hub id — works without a local /LLMs mount
+    pretrained: true
+    minibatch_size: 256          # VRAM_TUNING.md: 512/128 was tight (~2.3-2.8 GB free) and 1.9x SLOWER in ep/hr than 256/64 (bottleneck is CPU-bound env collection, not GPU headroom)
+    pre_encode_inputs: true
+    load_in_4bit: false          # 4-bit + explicit device_map crashes with transformers==4.44.2
+    parallelism:
+      use_gpu: true
+      model_parallelism_size: 1
+      synchronize_gpus_after_scoring: false
+      empty_cuda_cache_after_scoring: false
+
+rl_script_args:
+  path: ???
+  seed: ???
+
+  # llm
+  gradient_batch_size: 64       # THROUGHPUT_SCALING.md tuned setting: bigger batches don't create more work, just heavier update cycles for no extra episodes collected
+  gradient_minibatch_size:
+
+  # LoRA
+  use_lora: true
+  lora_r: 16
+  lora_alpha: 32
+
+  # SAC
+  gamma: 0.99
+  lr: 1e-4
+  a_lr: 1e-3
+  minibatch_size: 256
+  update_freq: 128              # must be >= number_envs: collect_trajectories does nb_steps=update_freq // nb_envs=number_envs, floors to 0 (infinite no-op loop) if update_freq < number_envs
+  nb_updates: 2              # 2 gradient steps per cycle; same peak VRAM (graph freed between steps)
+  empty_cache_between_chunks: false  # ~42 ms/call sync overhead; enable only for VRAM-tight runs (e.g. delay_depth 99) — see FP32_BOTTLENECK.md
+  warmup_updates: 5
+  buffer_size: 250000           # 250k: ~16 update-cycle turnover at 40k episodes; balances diversity vs. RAM
+  n_steps: 3
+  alpha: auto
+
+  # rl training
+  number_envs: 128             # THROUGHPUT_SCALING.md Option 1: the knob that actually drives episode collection rate; start at 96, push to 128 if GPU-util troughs stay shallow (watch nvidia-smi -l 1), back off if CPU-bound troughs deepen
+  num_episodes: 500000           # ~10h; long enough to observe grow_herbivores learning progress
+  goal_sampler: magellan
+  loading_path:
+  adaptation_test: false
+
+  # logs
+  save_freq: 200
+  test_freq: 1000
+  output_dir: ???
+
+  # Environment
+  env_name: LittleZoo
+  goals_distribution: [20000, 4000, 800, 160, 32] #25k
+
+# Goal sampler params
+magellan_args:
+  N: 100
+  epsilon_start: 1.0
+  epsilon_end: 0.2
+  epsilon_decay: 320
+  use_value: false
+  buffer_size: 5000
+  batch_size: 256
+  recompute_freq: 32
+  sr_adapters: sr_adapters
+  train_llm: true
+  delay_depth: 6

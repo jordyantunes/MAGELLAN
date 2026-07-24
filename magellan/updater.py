@@ -16,8 +16,8 @@ from utils.perf_utils import PerfTimer, gpu_mem_snapshot
 
 class SACUpdater(BaseUpdater):
     
-    def __init__(self, model_type, minibatch_size, gradient_batch_size, goal_sampler, magellan, 
-                 loading_path, gradient_minibatch_size=None):
+    def __init__(self, model_type, minibatch_size, gradient_batch_size, goal_sampler, magellan,
+                 loading_path, gradient_minibatch_size=None, empty_cache_between_chunks=False):
         super(SACUpdater, self).__init__()
         self._model_type = model_type
         self._minibatch_size = minibatch_size
@@ -26,6 +26,9 @@ class SACUpdater(BaseUpdater):
         self._goal_sampler = goal_sampler
         self.magellan = magellan
         self.loading_path = loading_path
+        # empty_cache costs ~42 ms/call (~0.68 s/cycle at 16 calls); only needed
+        # when VRAM is tight (e.g. delay_depth 99 runs) — see FP32_BOTTLENECK.md
+        self._empty_cache_between_chunks = empty_cache_between_chunks
 
     def _get_trainable_params(self, model, return_with_names=False):
         if return_with_names:
@@ -256,8 +259,9 @@ class SACUpdater(BaseUpdater):
 
                 # Free unused memory
                 del value_loss, q_values, scores, action_log_probs, action_probs, next_q_values
-                with perf.time("cuda_empty_cache"):
-                    torch.cuda.empty_cache()
+                if self._empty_cache_between_chunks:
+                    with perf.time("cuda_empty_cache"):
+                        torch.cuda.empty_cache()
 
             with perf.time("optimizer_step"):
                 self.critic_optimizer.step()
@@ -343,8 +347,9 @@ class SACUpdater(BaseUpdater):
                         del alpha_loss
 
                     del scores, q_values, possible_actions_padding, prompts
-                    with perf.time("cuda_empty_cache"):
-                        torch.cuda.empty_cache()
+                    if self._empty_cache_between_chunks:
+                        with perf.time("cuda_empty_cache"):
+                            torch.cuda.empty_cache()
 
                 with perf.time("optimizer_step"):
                     self.policy_optimizer.step()

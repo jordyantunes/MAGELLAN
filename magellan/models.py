@@ -37,11 +37,7 @@ class LogScoringModuleFn(BaseModuleFunction):
             torch.gather(logits, 2, output_tokens[:, :, None]).squeeze(-1).to(torch.float32)  # filter with sequence tokens
 
         # Compute mask to assign probability 1 to padding tokens
-        mask = torch.ones(tokens_logprobs.shape, dtype=torch.bool, device=self.device)
-        for i, _output in enumerate(output_tokens):
-            for j, _token in enumerate(_output):
-                if _token != self._pad_token:
-                    mask[i, j] = False
+        mask = output_tokens == self._pad_token
         masked_token_probs = tokens_logprobs.masked_fill(mask, 0.0)  # apply mask
         minibatch_probs = masked_token_probs.sum(-1)  # compute final sequences' probability
 
