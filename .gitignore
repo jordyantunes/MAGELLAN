@@ -171,3 +171,6 @@ cython_debug/
 .pypirc
 
 outputs/
+scripts/.telegram_report_state.json
+scripts/.telegram_history.jsonl
+scripts/.telegram_messages.jsonl
