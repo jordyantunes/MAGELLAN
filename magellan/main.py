@@ -451,7 +451,12 @@ def main(config_args):
                     goals = [goal_buffer[i] for i in idx]
                     success = [success_buffer[i] for i in idx]
                     with perf.time("sr_update"):
-                        sr_update_results = agent.update([""] * len(goals),
+                        # Do not capture/gather this call's return value: doing so was
+                        # identified as the root cause of a multi-week grasp-learning
+                        # regression (see REGRESSION_HANDOFF.md) -- gathering a payload
+                        # over the same distributed IPC channel used by sac_update
+                        # corrupted the actor/critic training path.
+                        agent.update([""] * len(goals),
                                     [[""]] * len(success),
                                     goals=goals,
                                     success=success,
@@ -462,11 +467,6 @@ def main(config_args):
                                     func='sr_update',
                                     adapters=config_args.magellan_args.sr_adapters
                                 )
-                    if is_rl_process and sr_update_results is not None:
-                        mlflow.log_metrics(
-                            _flatten_worker_perf_metrics(sr_update_results, "sr_update", "sr_update_gpu"),
-                            step=ep
-                        )
 
             # Update goal sampler state
             with perf.time("goal_sampler_update"):

@@ -117,3 +117,25 @@ vs 31.3 s baseline (TF32 cut the GPU share; the CPU-side ~20 s remains, as predi
 - The Docker image used for run `7654c46a` is stale: it lacks the
   `policy_current_q_fwd` / `cuda_empty_cache` / `polyak_update` timers present at HEAD
   and logs `git_commit=unknown`. Rebuild before the A/B run.
+
+## Update (2026-07-26): TF32 exonerated — the actual regression was elsewhere
+
+A grasp-learning regression appeared shortly after this doc was written (no run since
+~2026-07-20 learned `test/grasp`; see `REGRESSION_HANDOFF.md`). It was suspected to be
+TF32, since that was this doc's only numerically-active change. Bisection proved
+otherwise:
+
+- A run with `NVIDIA_TF32_OVERRIDE=0` (driver-level TF32 kill switch) still got stuck —
+  TF32 exonerated.
+- Checking out commit `7001485` (immediately before the perf-instrumentation commit
+  `4f33ebe`, i.e. before *this doc's* changes even existed) reproduced healthy learning.
+- Checking out `4f33ebe` alone (before TF32/mask/empty_cache) reproduced the **stuck**
+  signature — isolating the bug to that commit, not this one.
+
+Root cause: `4f33ebe` changed `SACUpdater.update()`'s `sr_update` branch to return a
+perf/GPU-mem dict, and `main.py` started gathering that return value over the same
+distributed IPC channel (`dist.gather_object`) used by `sac_update`, corrupting the
+actor/critic training path. Fixed by dropping that return value (see commit message on
+the fix commit for detail). **This doc's projected gains stand** — TF32, the vectorized
+pad mask, and `empty_cache_between_chunks` gating are all confirmed numerically inert
+except for their intended perf effect; none contributed to the regression.

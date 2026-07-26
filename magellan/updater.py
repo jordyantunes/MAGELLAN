@@ -148,7 +148,9 @@ class SACUpdater(BaseUpdater):
             if kwargs["save_after_update"] and self._accelerator.process_index == 1:
                 torch.save(self.optimizer_sr.state_dict(), kwargs["saving_path"] + "/optimizer_sr.checkpoint")
 
-            return {**perf.as_metrics(prefix="sr_update"), **gpu_mem_snapshot(prefix="sr_update_gpu")}
+            # No return value here -- see the comment at the sr_update call site in
+            # main.py for why (gathering a return payload over this IPC channel
+            # corrupted the actor/critic training path).
 
         else: # sac_update
 
