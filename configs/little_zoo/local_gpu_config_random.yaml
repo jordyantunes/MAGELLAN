@@ -27,6 +27,7 @@ lamorel_args:
 rl_script_args:
   path: ???
   seed: ???
+  run_name:                      # MLflow run name; empty -> "seed{seed}"
   
   # llm
   gradient_batch_size: 96

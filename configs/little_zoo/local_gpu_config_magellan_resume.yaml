@@ -52,9 +52,9 @@ rl_script_args:
 
   # rl training
   number_envs: 64            # 2× envs → faster replay buffer fill; inference batches still chunked at minibatch_size
-  num_episodes: 500000           # ~10h; long enough to observe grow_herbivores learning progress
+  num_episodes: 500000          # extends past the 80002 already completed in run 2b60142f
   goal_sampler: magellan
-  loading_path:
+  loading_path: /app/outputs/magellan/80002   # resume from mlflow run 2b60142f19c94a9184be592d0aa2e250 (ep 80002)
   adaptation_test: false
 
   # logs

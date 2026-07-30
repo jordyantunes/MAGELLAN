@@ -27,6 +27,7 @@ lamorel_args:
 rl_script_args:
   path: ???
   seed: ???
+  run_name:                      # MLflow run name; empty -> "seed{seed}"
 
   # llm
   gradient_batch_size: 64       # THROUGHPUT_SCALING.md tuned setting: bigger batches don't create more work, just heavier update cycles for no extra episodes collected

@@ -175,7 +175,8 @@ def main(config_args):
 
     if is_rl_process:
         mlflow.set_experiment(config_args.rl_script_args.goal_sampler)
-        mlflow.start_run(run_name=f"seed{seed}")
+        run_name = config_args.rl_script_args.get("run_name", None) or f"seed{seed}"
+        mlflow.start_run(run_name=run_name)
     if is_rl_process:
         try:
             git_hash = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], stderr=subprocess.DEVNULL).decode().strip()

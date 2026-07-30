@@ -24,6 +24,9 @@ services:
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - MLFLOW_TRACKING_URI=http://mlflow:5000
       - PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+      # Set to 0 to force TF32 off at the driver level (overrides the
+      # torch.backends flags in magellan/main.py); empty = no override.
+      - NVIDIA_TF32_OVERRIDE=${NVIDIA_TF32_OVERRIDE:-}
       # Set your HuggingFace token if using gated models
       # - HF_TOKEN=...
     volumes:
@@ -40,6 +43,7 @@ services:
       rl_script_args.path=/app/magellan/main.py
       rl_script_args.output_dir=/app/outputs/${OUTPUT_DIR:-magellan}
       rl_script_args.seed=${SEED:-0}
+      rl_script_args.run_name=${RUN_NAME:-}
 
 volumes:
   hf_cache:
