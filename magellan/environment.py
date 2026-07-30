@@ -64,18 +64,31 @@ def generate_goals(env, seed, distribution, filter_test):
             color = rng.choice(colors)
 
             if obj in plants_set | plants_test_set:
-                return f'{color} {obj} seed'
+                name = f'{color} {obj} seed'
             elif obj in herbivores_set | carnivores_set | herbivores_test_set | carnivores_test_set:
-                return f'{color} baby {obj}'
+                name = f'baby {color} {obj}'
             else:
-                return f'{color} {obj}'
+                name = f'{color} {obj}'
+
+            meta = {
+                "type": obj,
+                "colors": color,
+            }
+
         else:
             if obj in plants_set | plants_test_set:
-                return obj + ' seed'
+                name = obj + ' seed'
             elif obj in herbivores_set | carnivores_set | herbivores_test_set | carnivores_test_set:
-                return 'baby ' + obj
+                name = 'baby ' + obj
             else:
-                return obj
+                name = obj
+
+            meta = {
+                "type": obj,
+                "colors": None,
+            }
+
+        return name, meta
 
     def _reservoir_add(reservoir, item, count, k):
         if count < k:
@@ -95,13 +108,13 @@ def generate_goals(env, seed, distribution, filter_test):
         counts = [0, 0, 0, 0, 0]
 
         for e1 in objects:
-            e1_name = get_name(e1)
+            e1_name, e1_meta = get_name(e1)
             for e2 in objects:
-                e2_name = get_name(e2)
+                e2_name, e2_meta = get_name(e2)
                 for e3 in objects:
-                    e3_name = get_name(e3)
+                    e3_name, e3_meta = get_name(e3)
                     for e4 in objects:
-                        e4_name = get_name(e4)
+                        e4_name, e4_meta = get_name(e4)
                         if colors:
                             seen = {
                                 (e1, e1_name),
@@ -125,7 +138,7 @@ def generate_goals(env, seed, distribution, filter_test):
                                         'You are standing on: nothing\n'
                                         'Inventory (0/2): empty\n'
                                         'Action: ')
-                                    meta = (o, e1, e2, e3, e4, color)
+                                    meta = (o, e1_meta, e2_meta, e3_meta, e4_meta, color)
                                     o_in_scene = any(
                                         obj == o and color in name
                                         for obj, name in seen
@@ -136,7 +149,7 @@ def generate_goals(env, seed, distribution, filter_test):
                                     'You are standing on: nothing\n'
                                     'Inventory (0/2): empty\n'
                                     'Action: ')
-                                meta = (o, e1, e2, e3, e4)
+                                meta = (o, e1_meta, e2_meta, e3_meta, e4_meta)
                                 o_in_scene = o in seen
 
                             for t in ('Grasp', 'Grow'):
@@ -178,14 +191,15 @@ def generate_goals(env, seed, distribution, filter_test):
         all_goals = OrderedDict()
 
         for e2 in objects:
-            e2_name = get_name(e2)
-            for e3 in objects:
-                e3_name = get_name(e3)
-                for e4 in objects:
-                    e4_name = get_name(e4)
+            for e2 in objects:
+                e2_name, e2_meta = get_name(e2)
+                for e3 in objects:
+                    e3_name, e3_meta = get_name(e3)
+                    for e4 in objects:
+                        e4_name, e4_meta = get_name(e4)
                     for o in objects_test:
                         e1 = o
-                        e1_name = get_name(e1)
+                        e1_name, e1_meta = get_name(e1)
                         seen = {e1, e2, e3, e4}
                         has_water = 'water' in seen
                         has_plant = bool(seen & plants_set)
@@ -224,9 +238,9 @@ def generate_goals(env, seed, distribution, filter_test):
                                 raise ValueError('Invalid object')
 
                             if colors:
-                                all_goals[g] = (t + ' ' + color + ' ' + o, e1, e2, e3, e4)
+                                all_goals[g] = (t + ' ' + color + ' ' + o, e1_meta, e2_meta, e3_meta, e4_meta)
                             else:
-                                all_goals[g] = (t + ' ' + o, e1, e2, e3, e4)
+                                all_goals[g] = (t + ' ' + o, e1_meta, e2_meta, e3_meta, e4_meta)
 
         if filter_test:
             def _sample(lst, k):

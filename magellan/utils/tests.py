@@ -22,12 +22,15 @@ def test_policy(test_envs, test_goals, agent):
         
     observations, infos = test_envs.reset([test_goals['goals'][g] for g in goals])
     
-    test_result = {
-        'grasp': [],
-        'grow_plants': [],
-        'grow_herbivores': [],
-        'grow_carnivores': []
-    }
+    # Initialize dictionary for base categories
+    categories = ['grasp', 'grow_plants', 'grow_herbivores', 'grow_carnivores']
+    test_result_lists = {cat: [] for cat in categories}
+    
+    # Initialize dictionary for category + color combinations (e.g., grasp_red, grow_plants_green)
+    colors = test_envs.envs[0].env_params['attributes'].get('colors') # Get colors from env attributes (all equal so get from first one)
+    for cat in categories:
+        for c in colors:
+            test_result_lists[f"{cat}_{c}"] = []
     
     terminated = [False for _ in range(len(goals))]
     while not all(terminated):
@@ -54,27 +57,43 @@ def test_policy(test_envs, test_goals, agent):
         for i in range(len(goals)):
             if dones[i] and not terminated[i]:
                 terminated[i] = True
+                goal_str = str(goals[i]).lower()
+                # Find the specific color for this goal
+                detected_color = next((c for c in colors if c in goal_str), None)
+                
+                # Update task type and its color combination
                 if goals[i] in grasp:
-                    test_result['grasp'].append(rewards[i])
+                    test_result_lists['grasp'].append(rewards[i])
+                    if detected_color:
+                        test_result_lists[f'grasp_{detected_color}'].append(rewards[i])
                 elif goals[i] in grow_plants:
-                    test_result['grow_plants'].append(rewards[i])
+                    test_result_lists['grow_plants'].append(rewards[i])
+                    if detected_color:
+                        test_result_lists[f'grow_plants_{detected_color}'].append(rewards[i])
                 elif goals[i] in grow_herbivores:
-                    test_result['grow_herbivores'].append(rewards[i])
+                    test_result_lists['grow_herbivores'].append(rewards[i])
+                    if detected_color:
+                        test_result_lists[f'grow_herbivores_{detected_color}'].append(rewards[i])
                 elif goals[i] in grow_carnivores:
-                    test_result['grow_carnivores'].append(rewards[i])
+                    test_result_lists['grow_carnivores'].append(rewards[i])
+                    if detected_color:
+                        test_result_lists[f'grow_carnivores_{detected_color}'].append(rewards[i])
                 else:
                     raise ValueError(f"Goal {goals[i]} not recognized.")
     
-    for key in ['grasp', 'grow_plants', 'grow_herbivores', 'grow_carnivores']:
-        # test_result[key + '_eval64'] = np.mean(test_result[key][:64])
-        # test_result[key + '_eval128'] = np.mean(test_result[key][:128])
-        # test_result[key + '_eval256'] = np.mean(test_result[key][:256])
-        # test_result[key + '_eval512'] = np.mean(test_result[key][:512])
-        # test_result[key + '_eval1024'] = np.mean(test_result[key][:1024])
-        test_result[key] = np.mean(test_result[key])
+    test_result = {}
+    for key, values in test_result_lists.items():
+        if len(values) > 0:
+            test_result[key] = np.mean(values)
+            # test_result[key + '_eval64'] = np.mean(test_result[key][:64])
+            # test_result[key + '_eval128'] = np.mean(test_result[key][:128])
+            # test_result[key + '_eval256'] = np.mean(test_result[key][:256])
+            # test_result[key + '_eval512'] = np.mean(test_result[key][:512])
+            # test_result[key + '_eval1024'] = np.mean(test_result[key][:1024])
+        else:
+            test_result[key] = 0.0  # Fallback if no goals of this specific type+color were sampled
             
     return test_result
-        
         
 def test_lp(test_goals, goal_sampler):
     result = {}
