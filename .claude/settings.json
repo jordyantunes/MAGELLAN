@@ -1,0 +1,81 @@
+{
+  "worktree": {
+    "bgIsolation": "none"
+  },
+  "permissions": {
+    "defaultMode": "acceptEdits",
+    "allow": [
+      "Read",
+      "Grep",
+      "Glob",
+
+      "Bash(uv run *)",
+      "Bash(.venv/bin/python *)",
+      "Bash(/home/jordy/projects/MAGELLAN/.venv/bin/python *)",
+
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git blame*)",
+      "Bash(git rev-parse*)",
+      "Bash(git merge-base*)",
+      "Bash(git branch*)",
+      "Bash(git add*)",
+      "Bash(git commit*)",
+      "Bash(git stash list*)",
+
+      "Bash(docker ps*)",
+      "Bash(docker logs*)",
+      "Bash(docker compose -f docker-compose.local.yml ps*)",
+      "Bash(docker compose -f docker-compose.local.yml logs*)",
+      "Bash(nvidia-smi*)",
+
+      "Bash(ls*)",
+      "Bash(find *)",
+      "Bash(wc *)",
+      "Bash(du *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(grep *)",
+      "Bash(awk *)",
+      "Bash(sed *)",
+      "Bash(jq *)",
+      "Bash(sort *)",
+      "Bash(echo *)",
+      "Bash(mkdir -p *)"
+    ],
+    "deny": [
+      "Bash(scripts/launch_run.sh*)",
+      "Bash(./scripts/launch_run.sh*)",
+      "Bash(bash scripts/launch_run.sh*)",
+      "Bash(sh scripts/launch_run.sh*)",
+      "Bash(run_magellan.sh*)",
+      "Bash(./run_magellan.sh*)",
+      "Bash(bash run_magellan.sh*)",
+      "Bash(sh run_magellan.sh*)",
+
+      "Bash(docker compose -f docker-compose.local.yml up*)",
+      "Bash(docker compose up*)",
+      "Bash(docker compose -f docker-compose.local.yml down*)",
+      "Bash(docker compose down*)",
+      "Bash(docker stop*)",
+      "Bash(docker kill*)",
+      "Bash(docker rm*)",
+
+      "Bash(python -m lamorel_launcher*)",
+      "Bash(python3 -m lamorel_launcher*)",
+      "Bash(uv run python -m lamorel_launcher*)",
+      "Bash(.venv/bin/python -m lamorel_launcher*)",
+      "Bash(sbatch*)",
+
+      "Bash(rm *)",
+      "Bash(git push*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean*)",
+      "Edit(outputs/**)",
+      "Edit(.claude/findings/**)"
+    ]
+  }
+}
