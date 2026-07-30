@@ -27,9 +27,10 @@ lamorel_args:
 rl_script_args:
   path: ???
   seed: ???
+  run_name:                      # MLflow run name; empty -> "seed{seed}"
 
   # llm
-  gradient_batch_size: 64       # THROUGHPUT_SCALING.md tuned setting; not a paper table value (paper doesn't separately specify this lamorel batching knob)
+  gradient_batch_size: 128      # Matches original pre-d775e19 config exactly. Right at the documented ~128 OOM ceiling on a 24GB 4090 (CLAUDE.md invariant) — watch nvidia-smi on first launch, ready to drop back to 64 if it OOMs.
   gradient_minibatch_size:
 
   # LoRA
@@ -58,8 +59,8 @@ rl_script_args:
   adaptation_test: false
 
   # logs
-  save_freq: 200
-  test_freq: 1000
+  save_freq: 500                # matches original pre-d775e19 config
+  test_freq: 5000               # matches original pre-d775e19 config
   output_dir: ???
 
   # Environment
@@ -78,7 +79,8 @@ magellan_args:
   recompute_freq: 32              # Table 6: Update frequency 32
   sr_adapters: sr_adapters
   train_llm: true
-  delay_depth: 24                 # controls the ACTUAL weights buffer size (= delay_depth+1) that Table 6 calls "B size: 100".
-                                   # Paper value would be 99, but each entry clones live LoRA+MLP weights on GPU every recompute_freq
-                                   # updates, so we start at 24 (buffer=25) and step up (49, 99) while watching VRAM before going
-                                   # all the way to the paper's value. See VRAM_TUNING.md.
+  # delay_depth intentionally omitted (matches the original pre-d775e19 config, commit 20f2729, exactly -- it never had
+  # this key). goal_sampler.py falls back to getattr(magellan_args, 'delay_depth', 3), i.e. effective buff_size=4.
+  # Table 6 says "B size: 100", but the original released code hardcoded buff_size = int(N / recompute_freq + 1)
+  # = int(100/32 + 1) = 4 -- an effective delay_depth of 3, NOT 99. The later 4090_paper config set delay_depth: 99
+  # from a literal (and apparently incorrect) reading of Table 6 against the actual algorithm. See SR_HEAD_DRIFT_HANDOFF.md.
