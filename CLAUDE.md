@@ -90,3 +90,20 @@ Checkpoints are saved as numbered directories under `output_dir` (e.g. `outputs/
 ### Environment (`environment.py`)
 
 `VectorizedEnv` wraps multiple `LittleZoo` instances. Goals are text prompts (e.g. `"Goal: Grasp apple\nYou see: ...\nAction: "`). `generate_goals` constructs the full goal space and applies a distribution filter — the `goals_distribution` config key controls how many goals per category (impossibles, grasp, grow_plants, grow_herbivores, grow_carnivores) are included in the training set.
+
+## MAGELLAN Config Invariants
+
+- `update_freq` MUST be >= `number_envs` (integer division to 0 causes a silent infinite no-op loop that hangs training on episode 1).
+- `n_llm_processes` MUST stay at 1 on a single-GPU box — lamorel splits GPUs across LLM processes, so a 2nd process gets no device and crashes.
+- On a 24GB 4090, `gradient_batch_size` above ~128 OOMs; do not extrapolate from the docs' 24GB row.
+
+Before proposing any config change, verify these three invariants explicitly.
+
+## Editing Scope
+
+Only change what was asked. Do not modify default output directories, logging paths, or unrelated config keys as a side effect of a fix. If a fix seems to require a broader change, stop and ask first.
+
+## Commits
+
+Group work into separate, logically scoped commits (e.g. perf instrumentation, config change, docs) rather than one large commit. Ask before committing if the scope spans more than one concern.
+
