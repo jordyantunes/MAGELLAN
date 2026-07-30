@@ -1,0 +1,38 @@
+{
+  "run_id": "1b6b62b5735641a694c5829f25bd3bb5",
+  "recorded_at": "2026-07-26T03:57:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "num_episodes": 20000,
+    "seed": 0,
+    "number_envs": 128,
+    "gradient_batch_size": 64,
+    "minibatch_size": 256,
+    "buffer_size": 250000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "note": "Fix verification run: full magellan:latest image rebuilt from experiments branch HEAD (5d37674) with the sr_update return-value fix applied (magellan/main.py, magellan/updater.py). Uses the real local_gpu_config_magellan_4090.yaml config (TF32, empty_cache_between_chunks, run_name -- everything from the regression era), not the stripped-down bisect config. Capped at num_episodes=20000 for a bounded verification run."
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "train/policy_loss": -0.109,
+    "train/value_loss": 0.000586,
+    "train/entropy": 1.510,
+    "train/alpha": 0.0119,
+    "episode_at_check": 20000
+  },
+  "summary": "FIX CONFIRMED on the real experiments branch. With the sr_update return-value fix applied to magellan/main.py and magellan/updater.py, the full 4090 config (TF32 on, empty_cache gating, everything) reproduces the healthy signature -- and faster than any prior run in this project's history: grasp>=0.5 by ep 3001, >=0.9 by ep 4008, 1.0 by ep 6007, zero collapses through 20000 episodes. This closes out the grasp regression that began ~2026-07-20 and blocked the paper-fidelity experiment plan.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "ABOVE_PAPER",
+      "metric": "test/grasp",
+      "description": "grasp>=0.9 by ep 4008 -- faster than the paper's 20-50k window and faster than any pre-regression healthy run in this project (previous best was ep 10009 in f194847f/832c0e23-era runs).",
+      "recommendation": "Regression resolved. Commit the fix, update REGRESSION_HANDOFF.md and FP32_BOTTLENECK.md to reflect the resolution, then resume the blocked paper-fidelity experiment plan (PAPER_FIDELITY_PLAN.md)."
+    }
+  ],
+  "comparison": "Matches the bisect-worktree confirmation (6c532ea9, same fix on top of 4f33ebe with a hand-built config) -- this run proves the fix holds on the actual current codebase with the real production config, not just the isolated bisect setup.",
+  "paper_vs_run": "ABOVE_PAPER: grasp>=0.9 by ep 4008 vs. paper's 20-50k window."
+}

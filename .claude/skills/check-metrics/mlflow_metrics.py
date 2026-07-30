@@ -25,7 +25,7 @@ import datetime
 import mlflow
 import mlflow.tracking
 
-DB = "sqlite:///outputs/mlflow.db"
+DB = os.environ.get("MLFLOW_TRACKING_URI", "http://localhost:5000")
 
 DEFAULT_METRICS = [
     "test/grasp",

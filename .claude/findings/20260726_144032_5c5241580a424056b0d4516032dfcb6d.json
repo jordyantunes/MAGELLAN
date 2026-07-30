@@ -1,0 +1,112 @@
+{
+  "run_id": "5c5241580a424056b0d4516032dfcb6d",
+  "recorded_at": "2026-07-27T00:00:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "500000",
+    "number_envs": "32",
+    "num_episodes": "500000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]",
+    "seed": "0",
+    "output_dir": "/app/outputs/magellan/2026-07-26-14-40-32"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 1.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.0301,
+    "test/estimated_lp_grow_plants": 0.0468,
+    "test/estimated_lp_grow_herbivores": 0.1245,
+    "test/estimated_lp_grow_carnivores": 0.1234,
+    "test/estimated_sr_impossibles": 0.5677,
+    "test/estimated_sr_grow_herbivores": 0.6066,
+    "test/estimated_sr_grow_carnivores": 0.6179,
+    "train/policy_loss": -0.0891,
+    "train/value_loss": 0.00223,
+    "train/entropy": 0.2567,
+    "train/alpha": 1.05e-07
+  },
+  "summary": "This is the post-fix verification run (started 2026-07-26, after commit fef10c2 resolved the sr_update IPC-gather regression) using the paper's magellan config. At ep 365k/500k, grasp and grow_plants have both solved cleanly (1.0), confirming the fix holds under the real paper config. However this run surfaces a distinct, previously-undetected problem: the SR head's estimated_sr_impossibles has drifted from a healthy trough of ~0.14-0.17 (ep 15-30k) up to 0.56-0.74 by ep 255-365k, and estimated_sr for grow_herbivores/grow_carnivores sits at 0.6-0.78 despite their true test SR being 0.0 the entire run. The SR head has lost per-goal discrimination over the course of training, well past the resolved actor/critic bug.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "BUG",
+      "metric": "test/grasp",
+      "description": "grasp crosses 0.9 by ep 5002 and 1.0 by ep 9000, holds at 1.0 for the rest of the run (fraction_above_last_quarter=1.0, 0 collapses) -- confirms the sr_update IPC-gather fix (commit fef10c2, resolved 2026-07-26) holds under the real paper-fidelity config.",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "INVESTIGATE",
+      "metric": "test/grow_plants",
+      "description": "grow_plants reaches 1.0 by ep 76012 (within paper ON_TRACK window) but shows 15 collapse events below 0.5 after first crossing, bottoming at 0.0 at least once, before stabilizing at 97.8% of last-quarter samples above 0.5.",
+      "recommendation": "Not currently a blocker since it recovers and stabilizes, but the >0 collapse count is worth tracking across future runs -- if collapse count grows in longer/larger runs it could indicate the same class of interference bug that affected grasp, just less severe on plants."
+    },
+    {
+      "category": "sr_head",
+      "severity": "BUG",
+      "metric": "test/estimated_sr_impossibles",
+      "description": "estimated_sr_impossibles dips to a healthy 0.14-0.17 around ep 15-30k (SR head correctly learning impossibles are unwinnable) but then steadily drifts upward for the rest of the run, reaching 0.56-0.74 by ep 255-365k -- more miscalibrated than the initial untrained state (0.52 at ep 0). This is well above the paper's BELOW_PAPER threshold (>0.20) and represents a regression *within* this run, not a static failure to learn.",
+      "recommendation": "Investigate SR head drift separately from the resolved actor/critic bug. Check whether delayed_adapters/weights_buffer snapshotting is stale, whether SR head LoRA gradients are being overwritten by another adapter's update, or whether goals_distribution's heavy impossibles oversampling (20000:4000:800:160:32) combined with a shrinking pool of *learnable* impossibles is causing catastrophic forgetting on that head as training progresses."
+    },
+    {
+      "category": "sr_head",
+      "severity": "BUG",
+      "metric": "test/estimated_sr_grow_herbivores",
+      "description": "estimated_sr_grow_herbivores and estimated_sr_grow_carnivores both sit at 0.60-0.78 by ep 300-365k while the true test/grow_herbivores and test/grow_carnivores are 0.0 throughout the entire run -- the SR head is confidently wrong, not just uncertain, on categories the policy has never solved.",
+      "recommendation": "Same root cause as the estimated_sr_impossibles drift is likely -- fix that first, then re-check whether grow_herbivores/carnivores estimates re-calibrate toward 0."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grow_herbivores",
+      "description": "grow_herbivores briefly rose to 0.109 at ep 186001 (within paper's ON_TRACK 60-80k window is missed -- first >0.1 happened much later than the 60-80k ON_TRACK band) then collapsed back to 0.0 and never recovered through ep 365k (fraction_above_last_quarter=0.0).",
+      "recommendation": "Given only 365k/500k episodes elapsed and paper reports grow_herbivores still ramping at this stage, partially EXPECTED for run length, but the collapse-and-never-recover pattern (vs grow_plants' collapse-and-recover) plus the SR head miscalibration above raises the possibility the goal sampler is starved for herbivore-goal LP signal because the SR head can no longer distinguish herbivore goals from impossibles. Re-evaluate at 500k completion."
+    },
+    {
+      "category": "paper_comparison",
+      "severity": "ON_TRACK",
+      "metric": "test/grasp, test/grow_plants",
+      "description": "grasp (0.9 @ 5002 ep, paper ON_TRACK 20-50k) is ABOVE_PAPER-fast; grow_plants (1.0 @ 76012 ep, paper ON_TRACK 80-120k for 0.9) is at the edge of ON_TRACK/ABOVE_PAPER.",
+      "recommendation": null
+    },
+    {
+      "category": "paper_comparison",
+      "severity": "BELOW_PAPER",
+      "metric": "diag/sr_impossibles (test/estimated_sr_impossibles)",
+      "description": "Paper's summary table wants <0.05 ABOVE_PAPER / 0.05-0.15 ON_TRACK / >0.20 BELOW_PAPER at 50k+ episodes. This run is at 0.31 by ep 90013 and climbs to 0.56-0.74 by 255-365k -- solidly BELOW_PAPER and worsening over time rather than converging.",
+      "recommendation": "See sr_head findings above."
+    },
+    {
+      "category": "config",
+      "severity": "EXPECTED",
+      "metric": null,
+      "description": "Run uses the paper's magellan config (32 envs, buffer_size 500000, goals_distribution [20000,4000,800,160,32], num_episodes 500000) and is currently RUNNING at ep 365006/500000 (73% complete).",
+      "recommendation": "Re-run /check-metrics once this run completes at 500k to get final grow_herbivores/carnivores numbers and see whether the SR head drift stabilizes, worsens further, or self-corrects."
+    },
+    {
+      "category": "config",
+      "severity": "BUG",
+      "metric": null,
+      "description": "This run was launched from `local_gpu_config_magellan.yaml` (the original base config), not `configs/little_zoo/local_gpu_config_magellan_4090_paper.yaml` (the dedicated paper-fidelity config already built and VRAM-validated per PAPER_FIDELITY_PLAN.md). Two params are off vs. paper Table 5/6 as a result: (1) `rl_script_args.minibatch_size: 512` vs. paper's `Batch size: 256` for the SAC update -- 2x the paper's batch size (the `_4090_paper.yaml` config already has this correct at 256); (2) `magellan_args.delay_depth: 3` vs. the paper-implied 99 (`_4090_paper.yaml` already steps this to 24, still short of 99 per the plan's staged rollout). `gradient_batch_size` (192 here) is a VRAM-only accumulation-chunk knob, not a paper deviation once `minibatch_size` matches -- confirmed via `updater.py:115` (`gradient_accumulation_steps = ceil(minibatch_size / gradient_batch_size)`), so effective batch is always `minibatch_size`.",
+      "recommendation": "Relaunch paper-fidelity comparisons using `local_gpu_config_magellan_4090_paper.yaml` (already has minibatch_size=256, gradient_batch_size=64, delay_depth=24) rather than the base config. Continue PAPER_FIDELITY_PLAN.md's staged delay_depth rollout (24 -> 49 -> 99) before treating any run as a true paper-fidelity comparison."
+    },
+    {
+      "category": "config",
+      "severity": "INVESTIGATE",
+      "metric": null,
+      "description": "`local_gpu_config_magellan.yaml` sets `distributed_setup_args.n_llm_processes: 2`, which per the documented invariant (CLAUDE.md: n_llm_processes must stay at 1 on a single-GPU box, else lamorel's np.array_split gives the 2nd LLM process an empty device list and it crashes) should have crashed on this host (`nvidia-smi` shows a single RTX 4090). The run nonetheless completed to 365k episodes without error.",
+      "recommendation": "Verify whether this run's container actually had access to >1 GPU at launch time, or whether the invariant/config is stale. Don't reuse `local_gpu_config_magellan.yaml` for future single-GPU runs without resolving this discrepancy first."
+    }
+  ],
+  "comparison": "No previous findings file existed for this run_id -- this is the first check.",
+  "paper_vs_run": "Grasp and grow_plants both meet or beat the paper's learning-speed benchmarks, confirming the sr_update IPC-gather regression fix holds under the real paper config. However, this run reveals a new, previously undetected issue: the SR head's estimated success probability for impossible and grow_herbivores/grow_carnivores goals has drifted far out of calibration as training progresses (0.56-0.78 estimated vs 0.0 true SR), which is a distinct failure mode not present in the paper and not part of the resolved grasp regression. The run also turns out to have used the wrong config file (base `local_gpu_config_magellan.yaml` instead of the dedicated `local_gpu_config_magellan_4090_paper.yaml`), so its `minibatch_size` (512 vs paper's 256) and `delay_depth` (3 vs paper-implied 99) are both further from paper fidelity than necessary -- future paper comparisons should use the dedicated config."
+}

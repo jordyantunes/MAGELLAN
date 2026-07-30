@@ -1,0 +1,58 @@
+{
+  "run_id": "d2796f7cc45b4bf6b5e9a6c36a68b92e",
+  "recorded_at": "2026-07-25T00:00:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "num_episodes": 500000,
+    "seed": 0,
+    "number_envs": 128,
+    "gradient_batch_size": 64,
+    "buffer_size": 250000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "note": "NVIDIA_TF32_OVERRIDE=0 (driver-level TF32 kill switch), 128-env config, discriminating test for the grasp regression (see REGRESSION_HANDOFF.md)"
+  },
+  "final_metrics": {
+    "test/grasp": 0.03125,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "train/policy_loss": -0.4541,
+    "train/value_loss": 0.0405,
+    "train/entropy": 0.478,
+    "train/alpha": 0.00199,
+    "episode_at_check": 106014
+  },
+  "summary": "TF32-off run reproduces the exact stuck signature at 106k episodes: test/grasp never crossed 0.5 (peak 0.14 at ep 33006, currently oscillating 0.0-0.08), the same flat failure seen in every post-07-20 run. This is the discriminating test from REGRESSION_HANDOFF.md, called well past its 4-6k verdict window, and the verdict is unambiguous: TF32 is exonerated as the cause.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grasp",
+      "description": "grasp flat in 0.0-0.14 band through 106k episodes; healthy runs (832c0e23, 2a717e4c) crossed 0.5 by ep 3-4k. Paper ON_TRACK window for grasp>=0.9 is 20-50k ep -- this run is 2x past that window and hasn't even reached 0.5.",
+      "recommendation": "TF32 is exonerated (this run had NVIDIA_TF32_OVERRIDE=0 and still failed identically). Proceed to next bisection step in REGRESSION_HANDOFF.md: git checkout 7001485 (pre-instrumentation commit, era of the healthy 07-17 image), rebuild, rerun same config+seed for ~5k episodes."
+    },
+    {
+      "category": "stability",
+      "severity": "INVESTIGATE",
+      "metric": "train/alpha",
+      "description": "alpha decayed from 0.0498 to 0.00199 -- consistent with the known stuck-run signature (alpha decay to ~0.001) but this also occurred in healthy runs, so not independently discriminating.",
+      "recommendation": null
+    },
+    {
+      "category": "stability",
+      "severity": "INVESTIGATE",
+      "metric": "train/entropy",
+      "description": "entropy currently 0.478, having earlier peaked near 1.5 (observed mid-run) -- matches the documented stuck-run signature (rises to ~1.5 then drifts down to a low plateau).",
+      "recommendation": null
+    },
+    {
+      "category": "paper_comparison",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grasp",
+      "description": "At 106k episodes grasp should be saturated per paper (ON_TRACK crossing 0.9 by 20-50k); instead it has never exceeded 0.14.",
+      "recommendation": "See policy_learning finding above -- this is the ongoing regression, not new information about paper fidelity."
+    }
+  ],
+  "comparison": "Same stuck signature as prior post-07-20 runs (a9402350, 6418601d, 58cf3752) -- flat grasp <=0.16, no learning. This run isolates and rules out TF32 specifically since it disabled TF32 at the driver level and still failed.",
+  "paper_vs_run": "Run is 2x past the paper's ON_TRACK window for grasp>=0.9 (20-50k ep) with grasp still near zero at 106k -- consistent with every other run since the 07-20 regression began, confirming this is not a TF32 issue."
+}

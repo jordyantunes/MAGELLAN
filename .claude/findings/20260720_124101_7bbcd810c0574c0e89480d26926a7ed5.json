@@ -1,0 +1,107 @@
+{
+  "run_id": "7bbcd810c0574c0e89480d26926a7ed5",
+  "start_time_str": "20260720_124101",
+  "recorded_at": "2026-07-20T12:55:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "seed": 0,
+    "model_path": "google/flan-t5-base",
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lr": 0.0001,
+    "gamma": 0.99,
+    "minibatch_size": 256,
+    "gradient_batch_size": 64,
+    "buffer_size": 250000,
+    "number_envs": 128,
+    "num_episodes": 500000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "output_dir": "/app/outputs/magellan/2026-07-20-12-41-01",
+    "status_at_check": "RUNNING (~1018 / 500000 episodes)"
+  },
+  "final_metrics": {
+    "test/grasp": 0.125,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_sr_impossibles": 0.00896,
+    "test/estimated_sr_delayed_impossibles": 0.32498,
+    "test/estimated_lp_grasp": 0.30919,
+    "test/estimated_lp_grow_plants": 0.31839,
+    "test/estimated_lp_grow_herbivores": 0.32104,
+    "test/estimated_lp_grow_carnivores": 0.32497,
+    "train/entropy": 1.44574,
+    "train/alpha": 0.04235,
+    "train/value_loss": 0.00132,
+    "train/policy_loss": -0.13448,
+    "train/alpha_loss": 0.12961
+  },
+  "summary": "This run just started (~1018 of 500,000 episodes, same config as the 223k-episode 832c0e2 run tracked previously). Its main significance is confirming the instrumentation work: perf/* phase timings and *_gpu/* memory metrics are now populating cleanly, and the diagnostic metrics were renamed from the old diag/sr_* / diag/raw_lp_* scheme to test/estimated_sr_* (with an impossibles category added) plus a delayed counterpart. No NaNs anywhere and no policy conclusions are meaningful yet at this episode count.",
+  "findings": [
+    {
+      "category": "config",
+      "severity": "EXPECTED",
+      "metric": null,
+      "description": "Run is only 1018/500000 episodes in (0.2%). All test/grow_* metrics are still 0.0 and test/grasp is 0.125 — this is expected noise at this stage, not a signal of any kind.",
+      "recommendation": "Re-check once this run passes ~20-50k episodes, where grasp should start crossing 0.9 per the paper's ON_TRACK window and per the 832c0e2 run's trajectory (0.9 at step 5003)."
+    },
+    {
+      "category": "sr_head",
+      "severity": "INVESTIGATE",
+      "metric": "instrumentation",
+      "description": "Diagnostic metrics have been renamed/restructured since the last tracked run: the old diag/sr_{cat} and diag/raw_lp_{cat} keys (still present in the current magellan/main.py source at line ~360-366) are absent from this run's logged metrics entirely. In their place, test/ and eval/ now carry estimated_sr_{cat}, estimated_sr_delayed_{cat}, and estimated_lp_{cat} for all five categories including impossibles, which appear to be produced by test_lp() rather than the diag block.",
+      "recommendation": "Confirm whether the diag/* block (main.py:351-366, gated on `if use_magellan and is_rl_process`) is dead code now that test_lp()/eval_lp() cover the same categories, or whether it's silently producing an empty dict (e.g. via an empty _diag_goals filter) and should either be removed or fixed. Not blocking, but worth cleaning up so the two code paths don't drift further out of sync."
+    },
+    {
+      "category": "stability",
+      "severity": "ON_TRACK",
+      "metric": "train/entropy, train/alpha",
+      "description": "train/entropy is finite and positive (1.4457, no NaN across 165 points) and train/alpha (0.0424) has not collapsed. Consistent with the entropy-NaN bug remaining fixed.",
+      "recommendation": null
+    },
+    {
+      "category": "performance",
+      "severity": "ON_TRACK",
+      "metric": "perf/*, *_gpu/*",
+      "description": "All new instrumentation metrics are logging correctly: perf/sac_update_seconds, perf/sr_update_seconds, perf/collect_trajectories_seconds, perf/test_seconds, and *_gpu/{mem_allocated,max_mem_allocated,mem_reserved}_mb are all present, non-zero, and update every iteration. Confirms perf_utils.py is wired up end-to-end and reaching MLflow.",
+      "recommendation": null
+    },
+    {
+      "category": "performance",
+      "severity": "INVESTIGATE",
+      "metric": "perf/sac_update_seconds",
+      "description": "sac_update dominates the training loop: ~7.4-8.0s/iteration vs. ~0.25s for collect_trajectories and ~0.6s for sr_update, so it is ~80% of per-iteration wall time. Of that, the timed sub-phases (critic_fwd + policy_fwd + target_fwd + backward + optimizer_step, each logged twice per sac_update call) only sum to ~4.4s -- a consistent 42-44% of sac_update_seconds (~3.2-3.5s/call) is untimed by any sub-phase metric. Checked across 8 consecutive iterations (steps 1551-1703), the gap is stable, not a one-off spike.",
+      "recommendation": "Add timing around whatever sits between the measured sub-phases inside sac_update -- likely candidates given the Lamorel architecture (CLAUDE.md): the RL-process<->LLM-worker IPC round trip, batch/tensor marshalling, or LoRA adapter switching between default/critic_target that isn't wrapped by the existing perf.time() calls. Without this, ~40% of the dominant cost center is invisible to the instrumentation."
+    },
+    {
+      "category": "performance",
+      "severity": "INVESTIGATE",
+      "metric": "perf/sac_update_target_fwd_seconds",
+      "description": "Target-network forward passes (critic_target adapter) average ~1.13s per call, ~2.7x the critic_fwd (~0.15s) and ~2.8x the optimizer_step (~0.002s), and about as much as backward (~0.49s). Two target_fwd calls per sac_update (~2.25s total) account for roughly 30% of the ~7.4s sac_update budget just to compute target Q-values.",
+      "recommendation": "Confirm whether this cost is dominated by the LoRA adapter switch to critic_target (Lamorel round trip) rather than the forward pass itself -- if so, batching/caching adapter switches or reducing target-network query frequency could meaningfully cut sac_update time."
+    },
+    {
+      "category": "performance",
+      "severity": "EXPECTED",
+      "metric": "perf/goal_sampler_update_seconds",
+      "description": "goal_sampler_update is ~0.0s on almost every iteration but spikes to ~31.2s exactly every 32 iterations (steps 693, 1334, spacing matches magellan_args.recompute_freq=32 in the active config). This is the full-goal-set (~25k goals per goals_distribution) LP recompute documented in local_gpu_config_magellan_4090_paper.yaml's comment ('clones live LoRA+MLP weights on GPU every recompute_freq'). Amortized over 32 iterations this is ~0.97s/iteration, matching the 0.76s average observed.",
+      "recommendation": "Not a bug, but worth quantifying its contribution to total wall time at scale: ~31s every 32 iterations is roughly 4% of wall time in this run's early window. If throughput becomes a bottleneck, recompute_freq is the lever (already noted in configs as a known paper-fidelity vs. speed tradeoff)."
+    },
+    {
+      "category": "performance",
+      "severity": "ON_TRACK",
+      "metric": "sac_update_gpu/*, sr_update_gpu/*",
+      "description": "sac_update peaks at ~9.4 GB max_mem_allocated (avg 8.7 GB) and sr_update peaks at ~4.25 GB. mem_allocated stays flat (~1.1-1.16 GB) across both, well below max_mem_allocated/mem_reserved, indicating no obvious growth/leak over these 165 points -- consistent with a stable steady-state footprint this early in the run.",
+      "recommendation": "Re-check at a later checkpoint (e.g. once the replay buffer and weights_buffer deque are full) to confirm memory stays flat over a longer horizon, since neither structure has reached steady-state size yet at 1018/500000 episodes."
+    },
+    {
+      "category": "paper_comparison",
+      "severity": "EXPECTED",
+      "metric": null,
+      "description": "Too early in the run (0.2% complete) to make any paper-benchmark comparison.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "Same config as 832c0e2 (223k/500k episodes, checked 2026-07-18), which is presumably this run's predecessor/restart. That run showed grasp/grow_plants saturating fast but ahead of schedule instability (15 grow_plants collapses), grow_herbivores/grow_carnivores stuck at 0, alpha prematurely collapsing to 1.35e-5, and diag/sr_impossibles stuck at 0.2655 (BUG). This new run is too early to say whether those issues recur, but the diagnostic metric naming/structure has changed since then (see sr_head finding above), and alpha has not yet shown early collapse (0.0424, well above the 0.05 near-zero threshold's neighborhood but trending down from a peak — worth rechecking once grasp saturates).",
+  "paper_vs_run": "Not yet meaningful — run is at 0.2% completion. Revisit once past ~20-50k episodes for a real paper comparison on grasp/grow_plants timing."
+}

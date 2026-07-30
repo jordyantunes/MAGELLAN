@@ -1,0 +1,107 @@
+{
+  "run_id": "832c0e234abe4ab28e7630c021ece862",
+  "start_time_str": "20260717_173441",
+  "recorded_at": "2026-07-18T00:00:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "seed": 0,
+    "model_path": "google/flan-t5-base",
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lr": 0.0001,
+    "gamma": 0.99,
+    "minibatch_size": 256,
+    "gradient_batch_size": 64,
+    "buffer_size": 250000,
+    "number_envs": 128,
+    "num_episodes": 500000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "output_dir": "/app/outputs/magellan/2026-07-17-17-34-36",
+    "status_at_check": "RUNNING (223010 / 500000 episodes)"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 1.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_sr_impossibles": 0.2655,
+    "test/estimated_lp_impossibles": 0.00812,
+    "test/estimated_lp_grasp": 0.00146,
+    "test/estimated_lp_grow_plants": 0.0,
+    "test/estimated_lp_grow_herbivores": 0.01118,
+    "test/estimated_lp_grow_carnivores": 0.01025,
+    "train/entropy": 0.39735,
+    "train/alpha": 0.0000135,
+    "train/value_loss": 0.002366,
+    "train/policy_loss": -0.09715,
+    "train/alpha_loss": 0.000027
+  },
+  "summary": "This is the largest MAGELLAN run tracked so far (223k of a planned 500k episodes, still RUNNING). Grasp and grow_plants both saturate to 100% test SR well ahead of the paper's schedule, but grow_plants suffers 15 collapse-and-recover cycles rather than converging smoothly. Grow_herbivores and grow_carnivores show no meaningful progress by 223k episodes, and alpha has already collapsed to near-zero, which may be starving the exploration needed to crack the harder goal categories.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "ON_TRACK",
+      "metric": "test/grasp",
+      "description": "test/grasp crosses 0.9 at step 5003 and reaches 1.0 by step 6010, staying at 1.0 for the rest of the run (fraction_above_last_quarter = 1.0, zero collapses).",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "INVESTIGATE",
+      "metric": "test/grow_plants",
+      "description": "test/grow_plants first crosses 0.9 at step 38016 (faster than paper) but then collapses back below 0.5 fifteen separate times over the remaining ~185k episodes, at least once dropping all the way to 0.0. Only 78.6% of points in the final quarter of the run are above 0.5 — this goal has not stably converged despite reaching 100% multiple times.",
+      "recommendation": "Inspect the grow_plants curve in the saved history file around each collapse to see if it correlates with goal-sampler reweighting away from grow_plants (LP estimate hitting the 0.01 threshold) or with SR-head/critic instability from adapter updates."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grow_herbivores",
+      "description": "test/grow_herbivores never exceeds 0.1 (max 0.031 at step 33011, back to 0.0 by the end). Paper's ON_TRACK window for first crossing 0.1 is 60-80k episodes; this run is already at 223k with no sustained signal, which falls in the '>100k or never' BELOW_PAPER bucket.",
+      "recommendation": "Check whether the grow_herbivores goal-sampler LP weight is being crowded out by grow_plants' instability, and whether grow_plants collapses are consuming replay/update budget that would otherwise go to herbivores."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grow_carnivores",
+      "description": "test/grow_carnivores stays at 0.0 throughout. Paper shows carnivores is the hardest goal, only starting to rise at 150-200k and still converging at 500k even for MAGELLAN. At 223k this is on the edge of expected/behind — worth watching but not alarming yet given grow_herbivores hasn't taken off either.",
+      "recommendation": "Re-check once this run reaches 300-350k episodes; if grow_herbivores remains flat by then, carnivores is very unlikely to start given the goal-progression dependency implied in the paper."
+    },
+    {
+      "category": "sr_head",
+      "severity": "BUG",
+      "metric": "test/estimated_sr_impossibles",
+      "description": "SR estimate for impossible goals sits at 0.2655 at 223k episodes, above the paper's >0.20 'not learning per-goal features' threshold. It briefly touched 0.52 at step 0 then never cleanly separated impossibles from learnable goals.",
+      "recommendation": "Compare against the two earlier short runs in the changelog where this same value hovered near 0.34+; if it hasn't dropped after 20x more episodes, the SR head likely lacks a discriminative signal for the impossibles class rather than just needing more data."
+    },
+    {
+      "category": "stability",
+      "severity": "INVESTIGATE",
+      "metric": "train/alpha",
+      "description": "train/alpha decayed from a peak of 0.0498 down to 1.35e-5 (well below the 0.05 near-zero threshold), effectively collapsing SAC's temperature. Entropy itself is finite and never NaN (min 0.022, last 0.397), so this isn't the known entropy-NaN bug — it looks like a legitimate but premature temperature collapse, coinciding with grasp/grow_plants saturating while grow_herbivores/grow_carnivores remain unsolved.",
+      "recommendation": "Consider whether the target entropy is being satisfied by the easy goals (grasp/plants) alone, starving exploration for the harder, still-unsolved goal categories. May be worth a per-goal or annealed alpha floor."
+    },
+    {
+      "category": "stability",
+      "severity": "ON_TRACK",
+      "metric": "train/value_loss",
+      "description": "value_loss trends down to 0.00237 by the end (min 6.2e-7), and policy_loss trends negative (-0.097, min -0.36) as expected for SAC. No NaNs across any train/* metric over 18305 logged points.",
+      "recommendation": null
+    },
+    {
+      "category": "paper_comparison",
+      "severity": "ABOVE_PAPER",
+      "metric": "test/grasp, test/grow_plants",
+      "description": "Grasp reaches 0.9 at ~5k episodes (paper ON_TRACK: 20-50k) and grow_plants reaches 0.9 at ~38k episodes (paper ON_TRACK: 80-120k). Both are notably ahead of the paper's reported schedule, though grow_plants' subsequent instability tempers this.",
+      "recommendation": null
+    },
+    {
+      "category": "paper_comparison",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grow_herbivores, test/grow_carnivores",
+      "description": "Neither grow_herbivores nor grow_carnivores has shown sustained progress by 223k episodes, while the paper's ON_TRACK window has herbivores rising at 60-80k and reaching 0.5 by 150-175k. This run is well past that window with no signal.",
+      "recommendation": "If this persists past 300k episodes, treat it as a real regression versus the paper rather than run-length variance, and check goal_sampler LP weighting and the alpha collapse noted above as likely contributors."
+    }
+  ],
+  "comparison": null,
+  "paper_vs_run": "This run is faster than the paper on the easy goals (grasp, grow_plants) but is lagging badly on the two harder categories (grow_herbivores, grow_carnivores) relative to the paper's reported timeline, and shows instability (repeated grow_plants collapses, premature alpha collapse, and a still-undifferentiated SR estimate for impossible goals) that the paper's MAGELLAN curves do not exhibit at this stage."
+}

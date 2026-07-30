@@ -1,0 +1,45 @@
+{
+  "run_id": "f194847f563e495cb095fd91bd3e723a",
+  "recorded_at": "2026-07-25T21:55:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "num_episodes": 500000,
+    "seed": 0,
+    "number_envs": 128,
+    "gradient_batch_size": 64,
+    "minibatch_size": 256,
+    "buffer_size": 250000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "note": "Bisection run: code checked out at commit 7001485 (pre-instrumentation, pre-TF32, the era of the healthy 07-17 image), rebuilt into a fresh Docker image, launched with the exact same hyperparams as the healthy 832c0e23 run and the stuck a9402350/d2796f7c runs. Config file configs/little_zoo/local_gpu_config_magellan_4090_bisect.yaml added locally in the bisect worktree (didn't exist at this commit)."
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "train/policy_loss": -0.146,
+    "train/value_loss": 0.00496,
+    "train/entropy": 1.531,
+    "train/alpha": 0.0239,
+    "episode_at_check": 15017
+  },
+  "summary": "Bisection run at commit 7001485 (pre-4f33ebe, pre-0caf5f2 -- pre-instrumentation and pre-TF32) reproduces the healthy learning signature with the identical config/seed that made a9402350 and d2796f7c get stuck: grasp crossed 0.5 by ep 5004, 0.9 by ep 10009, and 1.0 by ep 15017, holding stably ever since (fraction_above_last_quarter=1.0, zero collapses). This confirms the regression is NOT in the base Docker image or dependency resolution -- it was introduced by one of the two commits between 7001485 and HEAD (4f33ebe or 0caf5f2), despite TF32, the vectorized pad mask, and the gated empty_cache all having been individually verified inert.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "BUG",
+      "metric": "test/grasp",
+      "description": "grasp reached 1.0 by ep 15017 on 7001485 code with the exact config+seed that produces a flat <=0.16 grasp curve on current code (a9402350, d2796f7c). This isolates the regression to code changes in 4f33ebe and/or 0caf5f2.",
+      "recommendation": "Walk forward per REGRESSION_HANDOFF.md: next test commit 4f33ebe alone (perf instrumentation only) with the same config+seed. If it reproduces healthy behavior, the bug is in 0caf5f2 specifically -- re-examine the pad-mask and empty_cache changes for an interaction effect the individual PoC benchmarks didn't catch. If 4f33ebe alone reproduces the STUCK signature, the alpha_loss.backward() reorder (previously ruled 'inert') needs to be re-examined -- it may interact with LoRA adapter switching or optimizer state in a way the line-by-line review missed."
+    },
+    {
+      "category": "config",
+      "severity": "INVESTIGATE",
+      "metric": null,
+      "description": "This bisection run required manually recreating a 4090-style config (local_gpu_config_magellan_4090_bisect.yaml) since that file didn't exist at 7001485, and needed an added llm_args.seed: field to satisfy the installed Lamorel version's config schema (ConfigAttributeError on first launch attempt, fixed by adding the null seed key). Not a regression finding -- just a schema compatibility gap between the pinned Lamorel version and this commit's default config file.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "Directly contradicts the TF32-off run (d2796f7c) and the current-code same-config run (a9402350), both of which got stuck <=0.16 through 100k+ episodes with identical hyperparameters. This is the first successful, healthy replication since the regression began, and confirms the cause is in code, specifically in one of the two commits 4f33ebe/0caf5f2.",
+  "paper_vs_run": "ON_TRACK: grasp>=0.9 by ep 10009 is within the paper's 20-50k window (actually faster), matching the healthy 07-17 runs (832c0e23, 2a717e4c) rather than the stuck post-07-20 runs."
+}

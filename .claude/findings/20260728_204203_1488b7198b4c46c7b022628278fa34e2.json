@@ -1,0 +1,75 @@
+{
+  "run_id": "1488b7198b4c46c7b022628278fa34e2",
+  "recorded_at": "2026-07-29T00:30:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "128",
+    "buffer_size": "500000",
+    "number_envs": "32",
+    "num_episodes": "500000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]",
+    "output_dir": "/app/outputs/magellan/2026-07-28-20-41-58",
+    "status": "RUNNING (currently at ep ~300006/500000)"
+  },
+  "final_metrics_at_ep_300006": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 0.90625,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_sr_impossibles": 0.0411,
+    "test/estimated_sr_grow_herbivores": 0.0545,
+    "test/estimated_sr_grow_carnivores": 0.0493,
+    "test/estimated_sr_grow_plants": 0.0534,
+    "test/estimated_sr_grasp": 0.0735,
+    "train/policy_loss": -0.1098,
+    "train/value_loss": 0.000026,
+    "train/entropy": 0.0740,
+    "train/alpha": 0.00000097
+  },
+  "summary": "Grasp remains fully solved (1.0) and grow_plants stays near-saturated (0.90625, a slight dip from an earlier 1.0 peak but still above the 0.5 collapse threshold). grow_herbivores and grow_carnivores remain completely flat at 0.0 through ep 300006. The SR head lockstep collapse flagged in the previous check-in (ep 205000) has continued to resolve: by ep 300006, estimated_sr_impossibles/_grow_herbivores/_grow_carnivores/_grow_plants/_grasp have all converged to a tight 0.04-0.07 band (down from the earlier 0.10-0.50 lockstepped drift), and grow_plants/grasp both showed brief independent excursions (grow_plants spiked to ~0.40 around ep280-295k before dropping back to 0.05; grasp dipped to ~0.006 around ep260k) suggesting the head is starting to discriminate categories again rather than sharing one collapsed output. train/entropy has fallen close to zero (0.01-0.07 over the last ~60k episodes) alongside train/alpha collapsing to ~1e-6, consistent with a near-deterministic policy now that grasp/grow_plants are saturated.",
+  "findings": [
+    {
+      "category": "sr_head",
+      "severity": "INVESTIGATE",
+      "metric": "test/estimated_sr_impossibles",
+      "description": "UPDATE from ep205000 check: the SR-head lockstep collapse (impossibles/herbivores/carnivores/grow_plants all moving in near-identical lockstep) has continued to weaken. By ep300006 all five category estimates sit in a tight 0.04-0.07 band, near the paper's ABOVE_PAPER threshold (<0.05) for diag/sr_impossibles-equivalent metrics. Crucially, grow_plants and grasp now show independent excursions decoupled from impossibles/herbivores/carnivores (grow_plants rose to ~0.40 at ep280-295k then dropped to 0.05 at ep300006; grasp dipped to ~0.006 at ep260016) -- the first sign since this bug was first observed (across 3 separate runs) that the head may be recovering discriminative behavior rather than staying permanently collapsed.",
+      "recommendation": "Continue tracking to run completion. If the 0.04-0.07 band holds and grow_herbivores/carnivores true SR still doesn't rise, the bug is not fully resolved -- something else may be blocking those categories even with a well-calibrated SR head (e.g. the near-zero alpha suppressing exploration, see below). If the band stays low and stable, downgrade this finding from BUG to EXPECTED/resolved on next check."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grow_herbivores",
+      "description": "test/grow_herbivores is still flat at 0.0 through ep300006 (never exceeded 0.03125 all run), now 120k+ episodes past the paper's ON_TRACK window (60-80k) for first crossing >0.1. test/grow_carnivores is also still flat (max 0.0156); the paper's own ON_TRACK window for carnivores first-rise is 150-200k, so at 300k carnivores has now also moved from EXPECTED into BELOW_PAPER territory.",
+      "recommendation": "Even as the SR head lockstep collapse resolves (see sr_head finding above), herbivores/carnivores show no sign of picking up. Worth checking whether alpha's near-total collapse (~1e-6) is now the binding constraint on exploring these goals, independent of the SR head fix."
+    },
+    {
+      "category": "stability",
+      "severity": "INVESTIGATE",
+      "metric": "train/entropy",
+      "description": "train/entropy peaked ~1.4 around ep67k then declined steadily, bottoming near 0.015 at ep243044 and sitting at 0.01-0.07 for the last ~60k episodes -- consistent with train/alpha's collapse to ~1e-6 removing essentially all entropy-bonus pressure. Not NaN, still positive, but close enough to zero that the policy is effectively near-deterministic.",
+      "recommendation": "This is plausible given grasp/grow_plants saturation, but combined with grow_herbivores/carnivores staying flat, a near-deterministic policy has little chance of discovering the longer action sequences those goals likely require. Worth checking whether alpha auto-tuning is stuck (e.g. target entropy miscalibrated) rather than correctly converged."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "EXPECTED",
+      "metric": "test/grow_plants",
+      "description": "test/grow_plants dipped from its earlier 1.0 peak to 0.90625 by ep300006 -- a mild wobble, still well above the 0.5 collapse threshold and consistent with the single recorded collapse-and-recovery already noted in the prior check-in.",
+      "recommendation": null
+    },
+    {
+      "category": "policy_learning",
+      "severity": "ABOVE_PAPER",
+      "metric": "test/grasp",
+      "description": "test/grasp remains fully solved at 1.0 through ep300006 with zero collapses, still well ahead of the paper's 20-30k ON_TRACK window for reaching this level.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "Direct continuation of the same run checked at ep205000 (findings updated in place, not a new run). Key change: the SR-head lockstep collapse that reproduced the known bug is visibly weakening -- category estimates converged from a noisy 0.09-0.50 range down to a tight 0.04-0.07 band, and grow_plants/grasp are starting to decouple from impossibles/herbivores/carnivores, the first evidence of recovery seen across three reproductions of this bug. However grow_herbivores/carnivores still show zero real-policy progress, and train/alpha/entropy have now collapsed much further (alpha ~1e-6, entropy ~0.01-0.07), raising a new possible explanation (exploration collapse) for why herbivores/carnivores remain stalled even as the SR head recovers.",
+  "paper_vs_run": "Grasp remains ahead of paper pace; grow_plants is essentially on par (minor wobble). grow_herbivores has now clearly missed its paper window (BELOW_PAPER) and grow_carnivores has also just crossed from EXPECTED into BELOW_PAPER territory at this run length. The SR-head bug that was the leading suspect for blocking these categories appears to be self-correcting, so if herbivores/carnivores still fail to rise over the remaining ~200k episodes, exploration collapse (near-zero alpha/entropy) becomes the more likely blocker to investigate next."
+}

@@ -1,0 +1,38 @@
+{
+  "run_id": "6c532ea9f1db4541bab752d3707c03a9",
+  "recorded_at": "2026-07-26T01:53:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "num_episodes": 20000,
+    "seed": 0,
+    "number_envs": 128,
+    "gradient_batch_size": 64,
+    "minibatch_size": 256,
+    "buffer_size": 250000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "note": "Bisection run: code at commit 4f33ebe with ONLY the sr_update return-value/gather change reverted to match 7001485 (agent.update(..., func='sr_update', ...) call no longer captures/returns a dict, and the corresponding mlflow.log_metrics(_flatten_worker_perf_metrics(sr_update_results,...)) block in main.py removed). Everything else from 4f33ebe kept intact: perf.time() wrapping throughout, mlflow.log_artifacts checkpoint upload, the alpha_loss.backward() reorder, gpu_mem_snapshot calls. num_episodes capped at 20000 so the container terminates on its own for a bounded, notifiable test."
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "train/policy_loss": -0.132,
+    "train/value_loss": 0.00549,
+    "train/entropy": 1.539,
+    "train/alpha": 0.0214,
+    "episode_at_check": 20000
+  },
+  "summary": "ROOT CAUSE CONFIRMED. Reverting only the sr_update return-value/gather change from 4f33ebe (keeping perf timers, mlflow.log_artifacts, and the alpha_loss reorder intact) fully restores healthy learning: grasp>=0.5 by ep 5004, >=1.0 by ep 10007, stable through 20000 episodes, zero collapses. This isolates the entire multi-week regression to a single change: capturing the return value of agent.update(func='sr_update') and adding a corresponding mlflow.log_metrics call in main.py (magellan/updater.py's sr_update branch changed from an implicit `return None` to `return {**perf.as_metrics(...), **gpu_mem_snapshot(...)}`, and main.py started capturing that into sr_update_results and logging it). The SR update path uses the same lamorel distributed IPC (Caller.update -> dist.gather_object across the RL and LLM worker processes) as sac_update; adding a gathered return payload here where none existed before evidently perturbs that shared distributed channel in a way that corrupts or desyncs the actor/critic learning path, despite the SR loss computation itself being unaffected (sr_impossibles was already known-healthy throughout the whole regression).",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "BUG",
+      "metric": "test/grasp",
+      "description": "Root cause of the 07-20 through 07-25 grasp regression identified: magellan/updater.py SACUpdater.update()'s sr_update branch returning a perf/gpu-mem metrics dict (added in commit 4f33ebe) instead of implicitly returning None, combined with magellan/main.py capturing that return value via `sr_update_results = agent.update(..., func='sr_update', ...)` and gathering/logging it. Reverting just this one change (while keeping every other 4f33ebe/0caf5f2 change: perf timers, TF32, pad-mask vectorization, empty_cache gating, mlflow.log_artifacts checkpoint upload) fully restores healthy learning.",
+      "recommendation": "Apply this exact revert to the experiments branch HEAD: in magellan/updater.py, remove the `return {**perf.as_metrics(prefix=\"sr_update\"), **gpu_mem_snapshot(prefix=\"sr_update_gpu\")}` at the end of the sr_update branch (let it implicitly return None as it did pre-4f33ebe). In magellan/main.py, stop capturing agent.update(...) into sr_update_results and remove the `if is_rl_process and sr_update_results is not None: mlflow.log_metrics(_flatten_worker_perf_metrics(sr_update_results, \"sr_update\", \"sr_update_gpu\"), step=ep)` block. This loses sr_update-specific perf/gpu-mem logging (sac_update's perf logging, which uses the same _flatten_worker_perf_metrics helper but was NOT implicated, should stay). Once applied, rerun the paper-fidelity experiment plan (PAPER_FIDELITY_PLAN.md) which has been blocked on this regression."
+    }
+  ],
+  "comparison": "Confirms and narrows the fc48b71d (4f33ebe, unmodified) finding: that run was stuck exactly like every post-07-20 run. This run, identical except for the one revert, is healthy -- pinpointing the sr_update return-value change as the sole cause, and fully exonerating 0caf5f2 (TF32/mask/empty_cache), the perf-timer wrapping in general, the alpha_loss reorder, and mlflow.log_artifacts.",
+  "paper_vs_run": "ON_TRACK: grasp>=0.9 by ep 10007, within the paper's 20-50k window and consistent with the pre-regression healthy baseline (7001485/f194847f, 832c0e23, 2a717e4c)."
+}

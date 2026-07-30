@@ -1,0 +1,72 @@
+{
+  "run_id": "58cf3752c49b43829fccfed39cedcde5",
+  "recorded_at": "2026-07-25T12:15:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "seed": 42,
+    "model_path": "google/flan-t5-base",
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lr": 0.0001,
+    "gamma": 0.99,
+    "minibatch_size": 256,
+    "gradient_batch_size": 64,
+    "buffer_size": 500000,
+    "number_envs": 32,
+    "num_episodes": 500000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "output_dir": "/app/outputs/magellan/2026-07-24-21-05-51",
+    "status_at_check": "RUNNING (~117000 / 500000 episodes, ~6.5h elapsed)"
+  },
+  "final_metrics": {
+    "test/grasp": 0.09375,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.00711,
+    "train/policy_loss": -0.37198,
+    "train/value_loss": 0.02494,
+    "train/entropy": 0.68291,
+    "train/alpha": 0.0015
+  },
+  "summary": "Paper-fidelity config run (32 envs, 500k buffer, seed 42) on the post-TF32/mask code. test/grasp has oscillated between 0.0 and 0.094 for 117k episodes with zero upward trend — far past the paper's 20-50k ON_TRACK window for grasp>=0.9 and past the 50k re-check deadline set by the previous check (run 6418601d). Meanwhile throughput is excellent (~18k ep/hr, confirming the perf changes), but the policy is not learning. Cross-run archaeology: the same config+seed pair that succeeded on the 07-17 image (832c0e2: grasp 0.9 by ep 5003, 128-env config) is stuck on the current image (a9402350: <=0.16 at 21k), and a 07-20 stale-image run (7654c46a, pre-TF32 code) already looked slow (0.016 at 3k vs 832c0e2's 0.266). The instrumentation commit 4f33ebe was diff-reviewed and is semantically inert; the vectorized pad mask is proven bit-identical (PoC assert); empty_cache removal is numerically inert. Prime remaining suspect is TF32, with a secondary possibility that the regression predates it (unknown drift between the 07-17 and 07-20 Docker images).",
+  "findings": [
+    {
+      "category": "paper_comparison",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grasp",
+      "description": "grasp never crossed 0.5 (max 0.094) through 117k episodes; paper ON_TRACK window for >=0.9 is 20-50k. All grow_* at 0.0 (EXPECTED at this stage only if grasp were on track; here they are downstream casualties).",
+      "recommendation": "Stop the run — it is not converging and each additional hour spends GPU time on a non-learning policy."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "INVESTIGATE",
+      "metric": "test/grasp",
+      "description": "Suspected code/build regression between the 07-17 Docker image (healthy: 832c0e2 crossed 0.5 at ep 4014) and current builds (a9402350, same 128-env config and seed 0, stuck <=0.16 at 21k; this run stuck <=0.094 at 117k). Candidate causes, in order: (1) TF32 enabled in commit 0caf5f2 — the only numerically-active change in that commit (mask change is bit-identical by PoC assert, empty_cache is inert); (2) unknown drift baked into the 07-20 image before TF32 existed — supported weakly by 7654c46a (old code, grasp 0.016 at 3k where healthy runs were 0.27-0.95); commit 4f33ebe itself was diff-reviewed clean.",
+      "recommendation": "Discriminating experiment (~45 min): relaunch the 128-env config, seed 0, with TF32 forced off via NVIDIA_TF32_OVERRIDE=0 in docker-compose environment (no code change needed — this env var overrides torch.backends allow_tf32). Healthy behavior = grasp >0.5 by ~4-5k episodes. If still stuck, rebuild from commit 7001485 (pre-instrumentation) and repeat to isolate image drift."
+    },
+    {
+      "category": "sr_head",
+      "severity": "ON_TRACK",
+      "metric": "test/estimated_lp_*",
+      "description": "Estimated LP is near zero everywhere (lp_grasp 0.007) — correct behavior given the policy genuinely has no learning progress; sibling run 6418601d showed sr_impossibles converging cleanly to ~0.002 (better than the healthy-policy 832c0e2 run, which had it stuck at 0.27). SR head is not the problem.",
+      "recommendation": null
+    },
+    {
+      "category": "stability",
+      "severity": "INVESTIGATE",
+      "metric": "train/entropy, train/alpha",
+      "description": "No NaNs (6717 points). Entropy rose 0.06->1.54 then drifted down to ~0.68 plateau; alpha decayed to 0.0015 with grasp unsolved. The healthy run's alpha also decayed to ~0 while learning, so alpha collapse alone is not discriminating — but a near-zero entropy bonus on top of a non-learning policy removes the escape hatch.",
+      "recommendation": "Resolves itself if the regression root cause is fixed; not worth tuning alpha independently until then."
+    },
+    {
+      "category": "config",
+      "severity": "EXPECTED",
+      "metric": null,
+      "description": "Throughput on the paper config with the new code is ~18k ep/hr (117k eps in ~6.5h) — the perf changes work as measured. goals_distribution puts 80% of goals on impossibles; identical in the healthy runs, so not the regression cause.",
+      "recommendation": null
+    }
+  ],
+  "comparison": "Hardens the INVESTIGATE from run 6418601d (same failure pattern at 24k, re-check deadline 50k) into a confirmed learning failure at 117k. Unlike 832c0e2, the SR head now converges on impossibles — the regression is specific to the actor/critic path.",
+  "paper_vs_run": "Far below paper on the policy axis: grasp unsolved at 117k vs paper's 20-50k window; all grow_* at zero. SR-head competence estimation is on or above paper trajectory. Root cause suspected in the training stack (TF32 or image drift), not in the MAGELLAN sampler."
+}

@@ -1,0 +1,38 @@
+{
+  "run_id": "fc48b71dd1724c52bca56b5a1faa4f3b",
+  "recorded_at": "2026-07-25T22:55:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "num_episodes": 500000,
+    "seed": 0,
+    "number_envs": 128,
+    "gradient_batch_size": 64,
+    "minibatch_size": 256,
+    "buffer_size": 250000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "note": "Bisection run: code checked out at commit 4f33ebe (perf/GPU timing instrumentation only -- no TF32, no pad-mask vectorization, no empty_cache gating), same config+seed as the healthy 7001485 bisect run and the stuck current-code runs."
+  },
+  "final_metrics": {
+    "test/grasp": 0.015625,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "train/policy_loss": -0.2608,
+    "train/value_loss": 0.0205,
+    "train/entropy": 0.982,
+    "train/alpha": 0.01258,
+    "episode_at_check": 55006
+  },
+  "summary": "Bisection run at commit 4f33ebe (perf instrumentation ONLY, predates TF32/pad-mask/empty_cache changes from 0caf5f2) reproduces the STUCK signature: test/grasp oscillates 0.0-0.11 through 55006 episodes, never crossing 0.5, matching every post-07-20 failing run exactly. This is decisive: the regression is caused by 4f33ebe itself, not 0caf5f2. Since 4f33ebe's diff is 'pure PerfTimer wrapping plus one reorder' (alpha_loss.backward() moved earlier in sac_update), and that reorder was previously reviewed and judged inert because its graph only touches log_alpha with everything else .detach()ed, that judgment needs to be re-examined -- either the reorder has a real effect the review missed, or one of the 'pure timing wrapper' additions (e.g. the timed current-Q forward pass, polyak update, or empty_cache calls) is not actually side-effect-free.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "BUG",
+      "metric": "test/grasp",
+      "description": "grasp flat 0.0-0.11 through 55k episodes on 4f33ebe alone, with the exact config+seed that reaches grasp=1.0 by ep 15017 on the immediately-preceding commit 7001485. This isolates the regression to 4f33ebe's diff: magellan/main.py, magellan/updater.py, magellan/utils/perf_utils.py (230 insertions, 125 deletions).",
+      "recommendation": "Re-diff 4f33ebe line-by-line against 7001485 specifically in updater.py's sac_update -- do not assume the earlier line-by-line review was exhaustive given it's now proven wrong. Prime suspects: (1) the alpha_loss.backward() reorder -- verify with autograd.grad or a hook that no other tensor's gradient actually changes, don't just eyeball the .detach() calls; (2) whether wrapping sections in 'with perf.time(...):' context managers introduces any synchronization (e.g. an implicit torch.cuda.synchronize() in PerfTimer.__enter__/__exit__ via perf_utils.py) that changes numerics under autocast/non-determinism, or changes control flow order (e.g. if perf.time() catches and swallows an exception, or if timing a code block accidentally duplicates/skips a step). Read magellan/utils/perf_utils.py in full -- that's new code introduced by this commit and hasn't been individually scrutinized yet the way main.py/updater.py have."
+    }
+  ],
+  "comparison": "Reverses the previous bisection call: 7001485 was healthy, so the regression must live in 4f33ebe or 0caf5f2 -- this run shows it's already broken at 4f33ebe alone, meaning 0caf5f2 (TF32, pad mask, empty_cache) is now fully exonerated as a contributor. The bug is entirely within 4f33ebe.",
+  "paper_vs_run": "BELOW_PAPER: grasp>=0.9 should occur by 20-50k ep per paper; this run is at 55k with grasp never exceeding 0.11, matching the ongoing regression pattern."
+}

@@ -1,0 +1,85 @@
+{
+  "run_id": "9bc9ddc8a79d4568999c5560594fc154",
+  "recorded_at": "2026-07-28T16:44:44Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "model_path": "google/flan-t5-base",
+    "lora_r": "16",
+    "lora_alpha": "32",
+    "lr": "0.0001",
+    "gamma": "0.99",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "buffer_size": "500000",
+    "number_envs": "32",
+    "num_episodes": "500000",
+    "goals_distribution": "[20000, 4000, 800, 160, 32]",
+    "seed": "0",
+    "delay_depth": "99",
+    "output_dir": "/app/outputs/magellan_paper_delay99/2026-07-27-20-22-58"
+  },
+  "final_metrics": {
+    "test/grasp": 1.0,
+    "test/grow_plants": 1.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_lp_grasp": 0.0184,
+    "test/estimated_lp_grow_plants": 0.0065,
+    "test/estimated_lp_grow_herbivores": 0.0058,
+    "test/estimated_lp_grow_carnivores": 0.0023,
+    "test/estimated_sr_impossibles": 0.7558,
+    "test/estimated_sr_grow_herbivores": 0.7484,
+    "test/estimated_sr_grow_carnivores": 0.7617,
+    "train/policy_loss": -0.1321,
+    "train/value_loss": 9.49e-05,
+    "train/entropy": 0.2581,
+    "train/alpha": 1.32e-06
+  },
+  "summary": "This is the run on the corrected paper-fidelity config (local_gpu_config_magellan_4090_paper.yaml: minibatch_size=256, delay_depth=99, matching Table 5/6 exactly), launched to test whether the batch-size/delay_depth gaps found in run 5c524158 explained the SR-head calibration drift observed there. They did not: the drift reproduces here, and reproduces FASTER. Now at ep 263k/500k, grasp and grow_plants both fully solved (1.0), but estimated_sr_impossibles/grow_herbivores/grow_carnivores have climbed further, peaking 0.78-0.85 around ep 180-220k and settling around 0.70-0.76 with noisy fluctuation (dipped to 0.52 at ep 260004) -- consistently far above the paper's expected near-zero calibration on unsolved categories. grow_herbivores/grow_carnivores remain flat at 0.0 the entire run (never crossed even the 0.05 milestone), a growing gap vs. the paper's ON_TRACK window (first >0.1 by 150-200k).",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "ON_TRACK",
+      "metric": "test/grasp, test/grow_plants",
+      "description": "grasp reaches 0.9 by ep 4000 and 1.0 by ep 6001, holds at 1.0 through ep 263000 (no collapses). grow_plants reaches 1.0 by ep 62004 (within paper's ON_TRACK 80-120k window, ahead of it); collapse count has grown to 7 (up from 4 at ep 168k) but still recovers to 95.5% above-0.5 in the last quarter -- the collapse-then-stabilize pattern from 5c524158 continues here, with collapses still accumulating rather than stopping.",
+      "recommendation": "Keep tracking n_collapses on grow_plants as the run continues -- if it keeps climbing (4 -> 7 already) without capping, escalate from EXPECTED noise to INVESTIGATE."
+    },
+    {
+      "category": "sr_head",
+      "severity": "BUG",
+      "metric": "test/estimated_sr_impossibles",
+      "description": "CONFIRMED reproducible and still worsening: dips to a healthy 0.17-0.19 at ep 15-30k, then climbs past 0.6 by ep 100-140k (faster than 5c524158's wrong-config run) and keeps climbing further to peak 0.72-0.85 around ep 180-220k, settling into a noisy 0.52-0.76 band through ep 263000 (last value 0.7558) -- worse than the ep-168k snapshot (0.67), not stabilizing.",
+      "recommendation": "This is a confirmed, config-independent, and still-progressing bug, not a transient. Root-cause directly: check delayed_adapters/weights_buffer snapshot correctness, whether SR head LoRA gradients interact with the actor/critic 'default' adapter update, and whether the BCE loss on the impossibles class is being diluted as grow_plants successes enter the SR training buffer (magellan_args.buffer_size=5000, batch_size=256)."
+    },
+    {
+      "category": "sr_head",
+      "severity": "BUG",
+      "metric": "test/estimated_sr_grow_herbivores, test/estimated_sr_grow_carnivores",
+      "description": "Both continue to track estimated_sr_impossibles almost exactly through ep 263000 (0.75, 0.76 vs impossibles' 0.76) despite true test/grow_herbivores and test/grow_carnivores staying at 0.0 the entire run -- reinforces that the SR head is converging toward one shared high-probability output rather than genuinely conflating specific goal categories.",
+      "recommendation": "Check whether the SR head's MLP output is saturating (e.g. sigmoid pre-activation growing unboundedly) -- would explain why impossibles/herbivores/carnivores estimates move together almost in lockstep across the whole run, not just transiently."
+    },
+    {
+      "category": "policy_learning",
+      "severity": "BELOW_PAPER",
+      "metric": "test/grow_herbivores, test/grow_carnivores",
+      "description": "Neither has crossed the 0.05 milestone through ep 263000 (max 0.03125 for herbivores at ep 84011, 0.046875 for carnivores at ep 61003) -- paper's ON_TRACK window for grow_herbivores first >0.1 is 150-200k episodes, now missed with the run past that window and still flat. This is the clearest evidence yet that the SR-head miscalibration is actively blocking generalization to unsolved categories: the goal sampler's LP signal depends on the SR head distinguishing herbivore/carnivore goals from impossibles, and it currently can't.",
+      "recommendation": "Let the run continue to 500k to see if herbivores/carnivores ever recover once (if) the SR head recalibrates, but treat this as a real below-paper regression, not just EXPECTED short-run behavior, since the run has now passed the paper's expected ON_TRACK window."
+    },
+    {
+      "category": "stability",
+      "severity": "ON_TRACK",
+      "metric": "train/value_loss, train/policy_loss, train/entropy, train/alpha",
+      "description": "value_loss down to 9.5e-05 (healthy), policy_loss trending negative (-0.132, expected for SAC), entropy finite (0.258, down from a mid-run peak of 0.562 but not collapsed), alpha decayed to 1.3e-06 (expected once grasp/grow_plants saturate). No NaNs, no instability.",
+      "recommendation": null
+    },
+    {
+      "category": "config",
+      "severity": "ON_TRACK",
+      "metric": null,
+      "description": "Corrected local_gpu_config_magellan_4090_paper.yaml (minibatch_size=256, delay_depth=99, matching paper Table 5/6 exactly). VRAM stable at ~12.2/24GB through 23h+ runtime -- delay_depth=99 (buffer=100) did not require empty_cache_between_chunks or other VRAM mitigation.",
+      "recommendation": "Update PAPER_FIDELITY_PLAN.md and VRAM_TUNING.md: delay_depth=99 confirmed safe at ~12GB peak, no further staging needed. The plan's step 3 (49 then 99) can be marked done -- 99 was launched directly and is stable."
+    }
+  ],
+  "comparison": "vs. the ep-168k snapshot of this same run: SR-head miscalibration has worsened further (0.67 -> 0.7558 on impossibles, peaking 0.78-0.85 mid-run), grow_plants collapse count grew from 4 to 7 (still recovering), and grow_herbivores/carnivores have now missed the paper's ON_TRACK window for first >0.1 (150-200k) entirely, upgrading that finding from INVESTIGATE to BELOW_PAPER. vs. 5c524158 (base config, minibatch_size=512, delay_depth=3): the SR-head drift is confirmed config-independent and consistently faster/worse on this corrected config.",
+  "paper_vs_run": "Grasp and grow_plants both track or beat the paper's learning-speed benchmarks on this paper-faithful config. However the SR head's competence estimation -- the core MAGELLAN mechanism the paper claims tracks observed SR within ~0.15 -- is badly and progressively miscalibrated here (0.70-0.76 estimated vs 0.0 true SR on unsolved categories, still climbing past ep 200k), and this is now visibly blocking grow_herbivores/grow_carnivores from ever starting to learn, missing the paper's expected onset window. This is the most consequential unresolved deviation from the paper found so far."
+}

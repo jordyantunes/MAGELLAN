@@ -1,0 +1,80 @@
+{
+  "run_id": "6418601daeec493fa3ddb92dc363dec9",
+  "start_time_str": "20260724_191855",
+  "recorded_at": "2026-07-24T19:20:00Z",
+  "params": {
+    "goal_sampler": "magellan",
+    "seed": 0,
+    "model_path": "google/flan-t5-base",
+    "lora_r": 16,
+    "lora_alpha": 32,
+    "lr": 0.0001,
+    "gamma": 0.99,
+    "minibatch_size": 256,
+    "gradient_batch_size": 64,
+    "buffer_size": 500000,
+    "number_envs": 32,
+    "num_episodes": 500000,
+    "goals_distribution": [20000, 4000, 800, 160, 32],
+    "output_dir": "/app/outputs/magellan/2026-07-24-19-18-50",
+    "run_name": "tf32fix-paper",
+    "status_at_check": "RUNNING (~21006-22001 / 500000 episodes)"
+  },
+  "final_metrics": {
+    "test/grasp": 0.0,
+    "test/grow_plants": 0.0,
+    "test/grow_herbivores": 0.0,
+    "test/grow_carnivores": 0.0,
+    "test/estimated_sr_impossibles": 0.002,
+    "test/estimated_sr_grasp": 0.0101,
+    "test/estimated_sr_delayed_grasp": 0.0161,
+    "test/estimated_lp_grasp": 0.0033,
+    "test/estimated_lp_grow_plants": 0.0003,
+    "test/estimated_lp_grow_herbivores": 0.0,
+    "test/estimated_lp_grow_carnivores": 0.0,
+    "train/entropy": 1.0029,
+    "train/alpha": 0.01414,
+    "train/value_loss": 0.00405,
+    "train/policy_loss": -0.24363
+  },
+  "summary": "This run (named 'tf32fix-paper', started right after commit 0caf5f2 which enabled TF32 and vectorized the LogScoringModuleFn pad mask) is at ~21-22k/500k episodes. Unlike the predecessor 832c0e2 run (same goals_distribution, buffer_size=250000, number_envs=128), which reached test/grasp=0.9 by episode 5003, this run's test/grasp is still oscillating between 0.0 and 0.17 with no visible upward trend through 21006 episodes, while train/entropy is climbing (0.08 -> 1.00) rather than settling. The SR head itself looks healthy: estimated_sr_impossibles has converged cleanly to ~0.002 (much better than 832c0e2's stuck-at-0.2655 bug), so the stall looks specific to the actor/policy rather than the SR estimator.",
+  "findings": [
+    {
+      "category": "policy_learning",
+      "severity": "INVESTIGATE",
+      "metric": "test/grasp, train/entropy",
+      "description": "test/grasp has not shown a sustained rise through 21006 episodes (values: 0.02, 0.06, 0.17, 0.02, 0.06, 0.05, 0.02, then mostly 0.0-0.05) despite the paper's ON_TRACK window for grasp>=0.9 being 20-50k episodes, and despite the same-config predecessor run 832c0e2 crossing 0.9 by episode 5003. train/entropy is simultaneously rising (0.079 -> 1.00) rather than collapsing toward a confident policy, suggesting the actor has not locked onto a working grasp strategy yet.",
+      "recommendation": "Not yet a confirmed regression (still inside the paper's 20-50k ON_TRACK window), but the contrast with 832c0e2's much faster convergence is stark enough to watch closely. Re-check at ~50k episodes. If grasp still hasn't crossed 0.9 by then, treat as BELOW_PAPER and start bisecting: this run differs from 832c0e2 in number_envs (32 vs 128), buffer_size (500000 vs 250000), and postdates the TF32 + vectorized pad-mask changes (commit 0caf5f2) plus the in-progress run_name change to magellan/main.py — any of these could plausibly slow policy convergence."
+    },
+    {
+      "category": "sr_head",
+      "severity": "ON_TRACK",
+      "metric": "test/estimated_sr_impossibles",
+      "description": "estimated_sr_impossibles converges from 0.52 at episode 0 to ~0.002-0.02 by episode 21006, cleanly distinguishing impossible goals from possible ones. This is a marked improvement over the 832c0e2 run, which had this metric stuck at 0.2655 (flagged BUG previously).",
+      "recommendation": null
+    },
+    {
+      "category": "stability",
+      "severity": "ON_TRACK",
+      "metric": "train/entropy, train/value_loss, train/policy_loss",
+      "description": "No NaNs across 1691+ points. train/value_loss stays low (0.0006 -> 0.004-0.01) and train/policy_loss trends negative (0 -> -0.24), both consistent with normal SAC training dynamics even though the policy hasn't converged on grasp yet.",
+      "recommendation": null
+    },
+    {
+      "category": "config",
+      "severity": "INVESTIGATE",
+      "metric": "number_envs, buffer_size",
+      "description": "This run uses number_envs=32 and buffer_size=500000, differing from the last known-good comparable run (832c0e2: number_envs=128, buffer_size=250000). Per prior findings ([[project_lamorel_parallelism]] memory), number_envs mainly affects GPU-concurrency amortization and minibatch fill, not learning dynamics, so it's an unlikely root cause on its own -- but it is the most visible config delta and worth ruling out first if the grasp stall persists past 50k.",
+      "recommendation": "If grasp is still not converging at the next check, try an isolated run with number_envs=128 (matching 832c0e2) to rule out the parallelism config as a factor before suspecting the TF32/pad-mask changes."
+    },
+    {
+      "category": "paper_comparison",
+      "severity": "INVESTIGATE",
+      "metric": "test/grasp",
+      "description": "At 21006/500000 episodes, test/grasp has not yet reached 0.9. This is still inside the paper's ON_TRACK window (20-50k episodes) so it is not yet classifiable as BELOW_PAPER, but it is far behind this codebase's own prior run (832c0e2 hit 0.9 by episode 5003) and behind the paper's fastest reported trajectory (~5-8k ep to reach 1.0 per Fig. D.2/D.3 extraction).",
+      "recommendation": "Re-run check-metrics once this run passes 50k episodes to get a definitive ON_TRACK vs BELOW_PAPER classification."
+    }
+  ],
+  "comparison": "Compared to 832c0e2 (last MAGELLAN run tracked, same goals_distribution): that run's SR head had a stuck-at-0.2655 estimated_sr_impossibles bug that this run does not exhibit (now converges to ~0.002), but this run's actor is dramatically slower to learn grasp (still 0.0-0.17 at 21k episodes vs 832c0e2's 0.9 by 5003 episodes). Net effect is ambiguous: SR estimation looks fixed/improved, but policy learning looks stalled or at least much slower, and the two changes (TF32 + vectorized pad mask + number_envs/buffer_size config swap) landed together, so no single cause can be isolated from this run alone.",
+  "paper_vs_run": "Still inside the paper's ON_TRACK window for grasp (20-50k ep) but trending toward the boundary with no clear upward trajectory yet; too early to call BELOW_PAPER, but this run is clearly behind both the paper's best-case trajectory and this codebase's own faster 832c0e2 run. Revisit at ~50k episodes for a firm verdict."
+}

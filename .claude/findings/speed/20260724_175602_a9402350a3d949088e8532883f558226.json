@@ -1,0 +1,37 @@
+{
+  "run_id": "a9402350a3d949088e8532883f558226",
+  "recorded_at": "2026-07-24T19:04:02.292026Z",
+  "start_time_str": "20260724_175602",
+  "params": {
+    "number_envs": "128",
+    "update_freq": "?",
+    "minibatch_size": "256",
+    "gradient_batch_size": "64",
+    "seed": "0",
+    "goal_sampler": "magellan"
+  },
+  "speed": {
+    "metric_used": "test/grasp",
+    "episode_start": 0,
+    "episode_end": 17020,
+    "episodes": 17020,
+    "elapsed_hours": 1.0602,
+    "ep_per_hr": 16054.0,
+    "n_points": 18
+  },
+  "gpu": {
+    "source_csv": "gpu_report_tf32.csv",
+    "n_samples": 3655,
+    "util_avg_pct": 79.8,
+    "util_min_pct": 0,
+    "util_max_pct": 100,
+    "mem_used_avg_mib": 10774.0,
+    "mem_used_min_mib": 551,
+    "mem_used_max_mib": 11074,
+    "zero_util_samples": 84,
+    "zero_util_pct": 2.3,
+    "low_util_samples_lt50": 346,
+    "low_util_pct": 9.5
+  },
+  "notes": null
+}
