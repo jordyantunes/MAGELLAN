@@ -138,7 +138,7 @@ def generate_goals(env, seed, distribution, filter_test):
                                         'You are standing on: nothing\n'
                                         'Inventory (0/2): empty\n'
                                         'Action: ')
-                                    meta = (o, e1_meta, e2_meta, e3_meta, e4_meta, color)
+                                    meta = (o, e1_meta, e2_meta, e3_meta, e4_meta)
                                     o_in_scene = any(
                                         obj == o and color in name
                                         for obj, name in seen
