@@ -24,6 +24,7 @@ lamorel_args:
       empty_cuda_cache_after_scoring: false
 
 rl_script_args:
+  run_name: null
   path: ???
   seed: ???
   
