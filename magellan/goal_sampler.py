@@ -251,7 +251,7 @@ class MAGELLANGoalSampler(GoalSampler):
         
         self.recompute_freq = magellan_args.recompute_freq
         
-        z
+        self.agent.update([""] * 8, [[""]] * 8, func='update_buffer', buff_size=int(self.N / self.recompute_freq + 1))
         self.sr, self.sr_delayed, self.lp = self.compute_lp(self.keys)
                 
     def sample(self):
